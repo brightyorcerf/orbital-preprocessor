@@ -1,0 +1,78 @@
+// osp.proto
+// ─────────────────────────────────────────────────────────────────────────────
+// OSP Satellite-to-Ground downlink schema (proto3)
+//
+// Design decisions:
+//   - TileFootprint is a sub-message (not a map<>) so it serializes to a
+//     fixed 4-field struct — predictable byte layout for telemetry auditing.
+//   - Anomaly.bbox_px uses repeated int32 (always exactly 4 values: x1,y1,x2,y2).
+//     A fixed-length sub-message would save 2 bytes of tag overhead but
+//     repeated int32 is far more readable for the analyst dashboard.
+//   - lat/lon use double (float64) — float32 has only ~7 decimal digits of
+//     precision, giving ~11m error at the equator. Unacceptable for a 10m GSD
+//     sensor. Double gives sub-millimetre precision.
+//   - confidence uses float (float32) — detector confidence is inherently
+//     noisy; 6-7 significant digits is more than sufficient.
+//   - AnomalyType enum avoids arbitrary string values in the downlink stream.
+//     The dashboard maps enum → display string client-side.
+//   - compression_ratio stored as int64 (can exceed int32 max for large scenes).
+
+syntax = "proto3";
+
+package osp;
+
+option optimize_for = LITE_RUNTIME;   // OrbitLab constraint: no descriptor pool
+
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+enum AnomalyType {
+  UNKNOWN       = 0;   // default / sentinel
+  SHIP          = 1;
+  AIRPLANE      = 2;
+  STORAGE_TANK  = 3;
+  HARBOR        = 4;
+}
+
+// ── Sub-messages ──────────────────────────────────────────────────────────────
+
+// Geographic bounding box of the processed tile.
+// All coordinates in WGS-84 decimal degrees.
+message TileFootprint {
+  double lat_min = 1;
+  double lat_max = 2;
+  double lon_min = 3;
+  double lon_max = 4;
+}
+
+// Single detected object in the scene.
+message Anomaly {
+  AnomalyType type       = 1;   // enum — avoids free-text in downlink
+  double      lat        = 2;   // WGS-84 latitude  (centre of bbox)
+  double      lon        = 3;   // WGS-84 longitude (centre of bbox)
+  float       confidence = 4;   // detector confidence [0.0, 1.0]
+
+  // Pixel-space bounding box in tile coords [x1, y1, x2, y2].
+  // Always exactly 4 elements — validated in serialization_utils.py.
+  repeated int32 bbox_px = 5;
+}
+
+// ── Top-level downlink message ────────────────────────────────────────────────
+
+// SceneBrief is the complete downlink payload.
+// Target: <2 KB serialized binary (verified in serialization_utils.py).
+//
+// Compression context (against 100MB Sentinel-2 scene):
+//   Raw 10980x10980 px × 6 bands × float32 = ~2.89 GB uncompressed
+//   Typical L2A GeoTIFF (all bands): ~100 MB
+//   SceneBrief binary:                ~200–400 bytes
+//   Compression ratio:                ~250,000–500,000:1
+message SceneBrief {
+  string        scene_id       = 1;
+  string        timestamp_utc  = 2;   // ISO 8601, e.g. "2026-04-24T09:12:44Z"
+  TileFootprint tile_footprint = 3;
+  float         cloud_cover    = 4;   // 0.0–1.0
+  repeated Anomaly anomalies   = 5;
+  float         inference_ms   = 6;   // on-board latency
+  string        model_version  = 7;   // e.g. "osp-yolov8n-int8-v1"
+  int64         compression_ratio = 8; // vs raw scene bytes
+}
