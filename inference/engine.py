@@ -317,7 +317,8 @@ class OSPEngine:
             scene_id = f"OSP-{h.upper()}"
 
         if timestamp is None:
-            timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+            import datetime
+            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if footprint is None:
             # Demo footprint: Indian Ocean shipping lane
@@ -378,17 +379,18 @@ class OSPEngine:
         tiles_dir: str,
         footprints: Optional[list[dict]] = None,
         max_tiles:  Optional[int] = None,
+        out_dir:    str = "/output",
     ) -> list[OSPPayload]:
         """
         Process all .npy tiles in a directory. Returns list of payloads.
-        Writes each payload to /output/{scene_id}.json (OrbitLab mount point).
+        Writes each payload to {out_dir}/{scene_id}.json.
         """
         tiles = sorted(Path(tiles_dir).glob("*.npy"))
         if max_tiles:
             tiles = tiles[:max_tiles]
 
-        out_dir = Path("/output")
-        out_dir.mkdir(exist_ok=True)
+        out_path_dir = Path(out_dir)
+        out_path_dir.mkdir(parents=True, exist_ok=True)
 
         payloads = []
         for i, tp in enumerate(tiles):
@@ -397,12 +399,55 @@ class OSPEngine:
             p   = self.run_tile(arr, scene_id=tp.stem, footprint=fp)
             payloads.append(p)
 
-            # Write to OrbitLab output mount
-            out_path = out_dir / f"{tp.stem}.json"
-            out_path.write_text(p.to_json())
+            # Write JSON payload
+            out_file = out_path_dir / f"{tp.stem}.json"
+            out_file.write_text(p.to_json())
 
-        log.info(f"Batch complete: {len(payloads)} tiles processed → /output/")
+        log.info(f"Batch complete: {len(payloads)} tiles processed → {out_dir}/")
         return payloads
+
+
+# ── MockONNXSession (exported for test_pipeline.py T4) ───────────────────────
+
+class MockONNXSession:
+    """
+    Lightweight ONNX session mock for unit testing.
+    Returns deterministic synthetic YOLOv8 output without loading any model.
+
+    Exported from engine.py so test_pipeline.py can import it directly:
+        from inference.engine import MockONNXSession
+    """
+
+    INPUT_SIZE  = INPUT_SIZE
+    NC          = 4
+    NUM_ANCHORS = 8400    # standard YOLOv8n anchor count for 640px
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def get_inputs(self):
+        class FakeInput:
+            name = "images"
+        return [FakeInput()]
+
+    def get_providers(self):
+        return ["CPUExecutionProvider"]
+
+    def run(self, output_names, feed_dict):
+        """Return synthetic YOLO output: 2 ships + 1 harbor."""
+        raw = np.zeros((1, 4 + self.NC, self.NUM_ANCHORS), dtype=np.float32)
+        detections = [
+            (320, 210, 60, 40, 0, 0.91),   # ship
+            (280, 300, 55, 35, 0, 0.83),   # ship
+            (480, 150, 100, 80, 3, 0.95),  # harbor
+        ]
+        for i, (cx, cy, w, h, cls_idx, score) in enumerate(detections):
+            raw[0, 0, i] = cx
+            raw[0, 1, i] = cy
+            raw[0, 2, i] = w
+            raw[0, 3, i] = h
+            raw[0, 4 + cls_idx, i] = score
+        return [raw]
 
 
 # ── CLI entry ─────────────────────────────────────────────────────────────────
@@ -418,7 +463,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     engine = OSPEngine(args.model)
-    payloads = engine.run_batch(args.tiles, max_tiles=args.max)
+    payloads = engine.run_batch(args.tiles, max_tiles=args.max, out_dir=args.out)
 
     # Print summary to stdout (piped to OrbitLab telemetry log)
     total_anomalies = sum(len(p.anomalies) for p in payloads)

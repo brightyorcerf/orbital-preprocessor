@@ -201,9 +201,9 @@ class OrbitalAnalyst:
             "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
         )
         self.model = model or (
-            "gemini-1.5-flash" if provider == "gemini"  else
-            "gpt-4o-mini"      if provider == "openai"  else
-            "claude-opus-4-5"
+            "gemini-1.5-flash"          if provider == "gemini"    else
+            "gpt-4o-mini"               if provider == "openai"    else
+            "claude-3-5-sonnet-20241022"   # valid Anthropic model
         )
 
     def analyse(self, payload_json: str) -> dict:

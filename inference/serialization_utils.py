@@ -136,7 +136,9 @@ def proto_to_payload(brief: SceneBrief):
 
     Returns engine.OSPPayload (imported lazily).
     """
-    # Lazy import to avoid circular dependency
+    # Lazy import to avoid circular dependency (absolute path for portability)
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     from engine import Anomaly as EngineAnomaly, OSPPayload
 
     footprint = {
@@ -253,7 +255,7 @@ class CompressionReport:
     proto_vs_raw_tile:     float   # proto compression ratio vs tile
     proto_vs_raw_scene:    float   # proto vs full 100 MB scene (headline)
     latency_ok:            bool    # inference_ms < 800
-    size_ok:               bool    # proto < 3 MB
+    size_ok:               bool    # proto < 2 KB (PRD target)
 
     def __str__(self) -> str:
         bar = "─" * 52
@@ -274,7 +276,7 @@ class CompressionReport:
             f"  Proto vs raw scene (100MB) :   {self.proto_vs_raw_scene:>8,.0f}:1\n"
             f"{bar}\n"
             f"  <800ms latency target      :   {'✓ MET' if self.latency_ok else '✗ MISSED'}\n"
-            f"  <3MB model size target     :   {'✓ MET' if self.size_ok else '✗ MISSED'}\n"
+            f"  <2KB proto size target     :   {'✓ MET' if self.size_ok else '✗ MISSED'}\n"
             f"{bar}\n"
         )
 
@@ -310,7 +312,7 @@ def get_compression_report(payload) -> CompressionReport:
         proto_vs_raw_tile    = raw_tile_bytes / max(1, proto_bytes),
         proto_vs_raw_scene   = raw_scene_bytes / max(1, proto_bytes),
         latency_ok           = payload.inference_ms < 800.0,
-        size_ok              = proto_bytes < 3 * 1024 * 1024,
+        size_ok              = proto_bytes < 2048,   # PRD: <2 KB downlink payload
     )
 
     return report

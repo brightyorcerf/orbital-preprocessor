@@ -35,3 +35,31 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# --- OSP Generated Datasets ---
+osp_dataset/
+osp_dataset_*/
+
+# --- Training Runs (Ultralytics output) ---
+runs/
+
+# --- Model Artifacts (generated, not committed) ---
+model/artifacts/*.onnx
+model/artifacts/*.pt
+yolov8n_6ch.pt
+yolov8n.pt
+
+# --- Inference Output ---
+/output/
+
+# --- Proto generated (re-compile with compile_proto.sh) ---
+# Uncommenting this will require running compile_proto.sh on every clone:
+# inference/osp_pb2.py
+
+# --- Misc ---
+globe.html
+*.npy
+!data/__init__.py
+!ground/__init__.py
+!model/__init__.py
+!inference/__init__.py
