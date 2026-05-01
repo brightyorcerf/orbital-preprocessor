@@ -1,0 +1,37 @@
+# --- Project Specific Artifacts ---
+# Generated protobuf classes (as per your layout notes)
+**/__pycache__/
+**/*_pb2.py
+**/*_pb2_grpc.py
+
+# --- Python Environment ---
+.venv/
+venv/
+env/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Data & Weights ---
+# Prevents heavy model weights or datasets from being pushed
+*.pth
+*.onnx
+*.weights
+data/*.zip
+data/*.csv
+data/*.json
+!data/__init__.py
+
+# --- OS Generated Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Tools & IDEs ---
+.vscode/
+.idea/
+*.swp
