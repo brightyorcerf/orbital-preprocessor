@@ -132,7 +132,7 @@ def footprint_to_scatter(footprint: dict, scene_id: str) -> go.Scattergeo:
 
 # ── Main globe builder ────────────────────────────────────────────────────────
 
-def build_globe(payloads: list[dict], show_orbit: bool = True) -> go.Figure:
+def build_globe(payloads: list[dict], show_orbit: bool = True, center_lat: float = 8.5, center_lon: float = 77.5) -> go.Figure:
     """
     Build the full 3D globe Plotly figure from a list of OSP payloads.
     """
@@ -239,8 +239,8 @@ def build_globe(payloads: list[dict], show_orbit: bool = True) -> go.Figure:
             showframe=False,
             bgcolor="#0a0e1a",
             projection_rotation=dict(
-                lon=77.5,    # Centre on Indian Ocean scene
-                lat=8.5,
+                lon=center_lon,
+                lat=center_lat,
                 roll=0,
             ),
         ),

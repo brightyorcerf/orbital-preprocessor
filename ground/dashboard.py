@@ -24,6 +24,8 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
+from globe import build_globe
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -285,9 +287,21 @@ def main():
     map_col, data_col = st.columns([3, 2])
 
     with map_col:
-        st.markdown("### 🗺️ 2D Situational Awareness")
-        fmap = build_folium_map(payloads)
-        st_folium(fmap, width=700, height=500, returned_objects=[])
+        tab1, tab2 = st.tabs(["🗺️ Tactical 2D", "🌍 Strategic 3D"])
+        
+        with tab1:
+            st.markdown("### 🗺️ 2D Situational Awareness")
+            fmap = build_folium_map(payloads)
+            st_data = st_folium(fmap, width=700, height=500, returned_objects=["last_object_clicked"])
+            
+        with tab2:
+            st.markdown("### 🌍 3D Situational Awareness")
+            center_lat, center_lon = 8.5, 77.5
+            if st_data and st_data.get("last_object_clicked"):
+                center_lat = st_data["last_object_clicked"]["lat"]
+                center_lon = st_data["last_object_clicked"]["lng"]
+            fig = build_globe(payloads, show_orbit=True, center_lat=center_lat, center_lon=center_lon)
+            st.plotly_chart(fig, use_container_width=True)
 
     with data_col:
         st.markdown("### 📋 Detections")
