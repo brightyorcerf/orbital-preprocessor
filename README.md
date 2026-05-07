@@ -72,3 +72,50 @@ Turn OrbitLab into a Semantic API for Earth Intelligence.
 > * Data economics (cost per inference, bandwidth saved)
 > * LLM integration (structured reasoning, not just "summary")
 > * System design (OVV protocol, closed-loop commanding)
+
+# Deployment & Local Simulation
+OSP is designed for the MOI-1A OrbitLab environment but can be fully simulated locally using the provided Dockerized sandbox.
+
+Prerequisites
+Hardware: NVIDIA GPU (Optional, defaults to CPU) | 4GB+ RAM.
+Environment: Conda or Python 3.10.
+
+1. Environment Setup
+```
+# Create the orbital-class environment
+conda create -n osp_dev python=3.10 -y
+conda activate osp_dev# Install mission-critical dependencies
+pip install -r requirements.txt
+```
+
+2. Synthetic Data Generation
+Since raw 6-band L2A satellite data is heavy, use the OSP Synth-Engine to generate test tiles:
+
+```
+python data/synth_demo.py --n_train 20 --out data/input_debug
+```
+
+3. Model Export (The "Stem-Swap")
+OSP utilizes a custom 6-channel YOLOv8n stem. To generate the deployment-ready ONNX artifact:
+
+```
+python satellite_export.py
+```
+
+4. Run the Edge Inference Engine
+Simulate the on-orbit preprocessor. This will transform ~100MB of raw spectral data into a <2KB JSON brief.
+Bash
+
+```
+python inference/engine.py \
+--model model/artifacts/osp_yolov8n_int8.onnx \
+--tiles data/input_debug/images/train \
+--out data/telemetry_out
+```
+
+5. Launch Command Centre
+Visualize the 2D tactical map, 3D orbital globe, and LLM-powered "ORION" risk analysis:
+
+```
+streamlit run ground/dashboard.py
+```
