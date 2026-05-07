@@ -1,0 +1,1 @@
+{"scene_id":"osp_synth_000008","timestamp_utc":"2026-05-07T19:09:31Z","tile_footprint":{"lat_min":8.0,"lat_max":9.0,"lon_min":77.0,"lon_max":78.0},"cloud_cover":0.002,"anomaly_count":0,"anomalies":[],"meta":{"model_version":"osp-yolov8n-int8-v1","inference_ms":93.7,"compression_ratio":34015}}
