@@ -10,7 +10,10 @@ Features:
   - Load live JSON payloads from /output/ (OrbitLab mount) or upload manually
   - 2D Folium map with tile footprint polygons + anomaly pins
   - Per-anomaly confidence colour coding (green → red)
-  - LLM analysis panel with ORION intelligence brief
+  - ORION GenAI Intelligence tab: RAG-grounded, memory-augmented LLM analysis
+  - Agentic mission controller with structured decision log
+  - Spectral explainability panel (per-band contribution analysis)
+  - Scene memory timeline — historical pattern detection across orbital passes
   - OVV command trigger UI
   - Compression ratio and inference stats sidebar
 """
@@ -27,6 +30,25 @@ from streamlit_folium import st_folium
 from globe import build_globe
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# ── GenAI module imports (graceful fallback if deps missing) ──────────────────
+try:
+    from agent.mission_controller import MissionController
+    _AGENT_AVAILABLE = True
+except ImportError:
+    _AGENT_AVAILABLE = False
+
+try:
+    from ground.scene_memory import get_memory
+    _MEMORY_AVAILABLE = True
+except ImportError:
+    _MEMORY_AVAILABLE = False
+
+try:
+    from inference.explainability import BandExplainer, UncertaintyEstimator
+    _EXPLAINABILITY_AVAILABLE = True
+except ImportError:
+    _EXPLAINABILITY_AVAILABLE = False
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -60,6 +82,31 @@ st.markdown("""
         border: 1px solid #1f2937;
         font-family: 'Courier New', monospace;
         font-size: 13px;
+    }
+    .reasoning-step {
+        background: #0f172a;
+        border-left: 2px solid #6366f1;
+        padding: 8px 12px;
+        margin: 4px 0;
+        border-radius: 0 4px 4px 0;
+        font-size: 12px;
+        font-family: 'Courier New', monospace;
+    }
+    .band-bar {
+        height: 8px;
+        border-radius: 4px;
+        background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+        margin: 2px 0;
+    }
+    .genai-badge {
+        display: inline-block;
+        background: #1e1b4b;
+        border: 1px solid #6366f1;
+        border-radius: 4px;
+        padding: 2px 8px;
+        font-size: 11px;
+        color: #a5b4fc;
+        margin: 2px;
     }
     h1, h2, h3 { color: #93c5fd; }
     .stButton>button { background: #1d4ed8; color: white; border: none; }
@@ -431,11 +478,162 @@ def main():
                         "Ensure your API key is set and google-generativeai is installed."
                     )
 
+    # ── ORION GenAI Agent ─────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🤖 ORION GenAI Intelligence Agent")
+
+    col_gen1, col_gen2 = st.columns([1, 1])
+    with col_gen1:
+        run_agent = st.toggle(
+            "Run Agentic Mission Cycle",
+            value=False,
+            help="Activates the full RAG + Memory + LLM agent pipeline",
+        )
+    with col_gen2:
+        if _AGENT_AVAILABLE:
+            st.markdown(
+                "<span class='genai-badge'>🔗 RAG</span>"
+                "<span class='genai-badge'>🧠 Memory</span>"
+                "<span class='genai-badge'>🤖 LLM Reasoning</span>"
+                "<span class='genai-badge'>⚡ Agentic Loop</span>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.warning("Agent deps missing. Run: pip install faiss-cpu sentence-transformers")
+
+    if run_agent and _AGENT_AVAILABLE and payloads:
+        agent_key = api_key_input or os.environ.get("GEMINI_API_KEY", "")
+        if not agent_key:
+            st.error("API key required. Set GEMINI_API_KEY or enter it in the sidebar.")
+        else:
+            payload_for_agent = payloads[0]
+            with st.spinner("🛰️ Running ORION Mission Cycle (RAG → Memory → Reason → Decide) ..."):
+                try:
+                    agent = MissionController(
+                        provider=llm_provider,
+                        api_key=agent_key,
+                        use_rag=True,
+                        use_memory=True,
+                    )
+                    cycle_result = agent.run_mission_cycle(payload_for_agent)
+
+                    a1, a2, a3 = st.columns(3)
+                    a1.metric("Alert Level",  cycle_result.decision.alert_level)
+                    a2.metric("OVV Requests", len(cycle_result.decision.ovv_requests))
+                    a3.metric("Cycle Time",   f"{cycle_result.cycle_ms:.0f}ms")
+
+                    narrative = cycle_result.llm_brief.get("scene_narrative", "")
+                    if narrative:
+                        st.info(f"📝 **Orbital Narrative:** {narrative}")
+
+                    reasoning_trace = cycle_result.llm_brief.get("reasoning_trace", [])
+                    if reasoning_trace:
+                        st.markdown("**🧠 ORION Reasoning Trace**")
+                        for i, step in enumerate(reasoning_trace, 1):
+                            st.markdown(
+                                f"<div class='reasoning-step'>[{i}] {step}</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    evidence = cycle_result.llm_brief.get("evidence_used", [])
+                    if evidence:
+                        st.markdown(
+                            "**📚 Knowledge Sources:** "
+                            + " ".join(f"<span class='genai-badge'>{e}</span>" for e in evidence),
+                            unsafe_allow_html=True,
+                        )
+
+                    if cycle_result.llm_brief.get("anomaly_assessments"):
+                        with st.expander("🔍 RAG-Grounded Anomaly Assessments", expanded=True):
+                            for aa in cycle_result.llm_brief["anomaly_assessments"]:
+                                risk = aa.get("risk_tier", "")
+                                risk_color = {
+                                    "CRITICAL": "#ef4444", "HIGH": "#f97316",
+                                    "MEDIUM": "#eab308",   "LOW":  "#22c55e",
+                                }.get(risk, "#6b7280")
+                                st.markdown(
+                                    f"**{aa.get('type','?').upper()}** — "
+                                    f"<span style='color:{risk_color}'>{risk}</span> risk | "
+                                    f"conf={aa.get('conf',0):.0%}<br>"
+                                    f"{aa.get('reasoning','')}<br>"
+                                    f"<i style='color:#9ca3af'>{aa.get('spectral_notes','')}</i>",
+                                    unsafe_allow_html=True,
+                                )
+                                unc = aa.get("uncertainty_factors", [])
+                                if unc:
+                                    st.caption("Uncertainty: " + " | ".join(unc))
+                                st.markdown("---")
+
+                    if cycle_result.decision.ovv_requests:
+                        st.markdown("**📡 Autonomous OVV Schedule**")
+                        for ovv in cycle_result.decision.ovv_requests:
+                            src_color = "#6366f1" if ovv.source == "llm" else "#3b82f6"
+                            st.markdown(
+                                f"<div class='metric-card'>"
+                                f"<b>{ovv.request_id}</b> | Priority {ovv.priority} | "
+                                f"<span style='color:{src_color}'>{ovv.source.upper()}-triggered</span><br>"
+                                f"📍 ({ovv.target_coords[0]:.4f}°, {ovv.target_coords[1]:.4f}°)<br>"
+                                f"<small>{ovv.reason}</small></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    with st.expander("📋 Full Mission Decision Log"):
+                        st.code(cycle_result.mission_log, language="text")
+
+                except Exception as e:
+                    st.error(f"Agent error: {e}")
+
+    # ── Spectral Explainability ───────────────────────────────────────────────
+    if _EXPLAINABILITY_AVAILABLE and payloads:
+        with st.expander("🔬 Spectral Explainability — Uncertainty Analysis"):
+            payload_ex   = payloads[0]
+            anomalies_ex = payload_ex.get("anomalies", [])
+            uncertainty_est = UncertaintyEstimator()
+            u_report = uncertainty_est.estimate(payload_ex)
+
+            st.markdown(f"**Sensing Quality: {u_report.overall_quality:.0%}**")
+            st.progress(u_report.overall_quality)
+            for factor in u_report.factors:
+                st.caption(f"⚠️ {factor}")
+            for rec in u_report.recommendations:
+                st.caption(f"→ {rec}")
+            if u_report.band_quality:
+                st.markdown("**Band Quality:**")
+                band_cols = st.columns(len(u_report.band_quality))
+                for col, (bname, bq) in zip(band_cols, u_report.band_quality.items()):
+                    short = bname.split("(")[1].rstrip(")") if "(" in bname else bname
+                    col.metric(short, f"{bq:.0%}")
+
+    # ── Scene Memory Timeline ─────────────────────────────────────────────────
+    if _MEMORY_AVAILABLE:
+        with st.expander("🕐 Scene Memory — Orbital Pass History"):
+            try:
+                memory    = get_memory()
+                m1, m2    = st.columns(2)
+                m1.metric("Scenes Remembered",  memory.total_scenes())
+                m2.metric("Anomalies Logged",   memory.total_anomalies())
+                timeline  = memory.get_timeline(limit=10)
+                if timeline:
+                    for entry in timeline:
+                        alert = entry.get("alert_level", "?")
+                        icon  = {"RED": "🔴","ORANGE":"🟠","YELLOW":"🟡","GREEN":"🟢"}.get(alert,"⚪")
+                        st.markdown(
+                            f"{icon} **{entry['scene_id']}** | "
+                            f"{entry['timestamp_utc'][:16]} UTC | "
+                            f"{entry['anomaly_count']} anomaly(s) | Alert: {alert or 'N/A'}"
+                        )
+                        if entry.get("llm_summary"):
+                            st.caption(f"  → {entry['llm_summary']}")
+                else:
+                    st.info("No scenes yet. Run the Agent to populate history.")
+            except Exception as e:
+                st.error(f"Memory error: {e}")
+
     # ── Footer ────────────────────────────────────────────────────────────────
     st.divider()
     st.caption(
         "OSP Command Centre · MOI-1A · TakeMe2Space · "
-        "Compressed telemetry: no raw imagery transmitted 🛰️"
+        "GenAI: Edge AI + RAG + Memory + Agentic Loop 🛰️"
     )
 
 

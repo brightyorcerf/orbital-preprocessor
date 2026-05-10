@@ -119,3 +119,13 @@ Visualize the 2D tactical map, 3D orbital globe, and LLM-powered "ORION" risk an
 ```
 streamlit run ground/dashboard.py
 ```
+
+# GenAI capabilities 
+
+OSP extends beyond traditional object detection by integrating grounded Generative AI directly into the orbital intelligence pipeline. Instead of treating the language model as a simple summarization layer, the system uses structured reasoning to transform compact anomaly telemetry into actionable mission intelligence. The onboard inference engine extracts semantic signals from multispectral imagery, while the ground-side GenAI stack evaluates uncertainty, retrieves contextual knowledge, and generates risk-aware operational decisions.
+
+The project incorporates Retrieval-Augmented Generation (RAG) to reduce hallucination risk and improve explainability. Maritime rules, restricted-zone policies, historical anomaly logs, and spectral heuristics are indexed using a vector database and retrieved dynamically during analysis. This allows the reasoning engine to ground every generated assessment in domain-specific evidence instead of relying solely on model priors. The result is a more reliable and auditable intelligence workflow suitable for safety-critical environments.
+
+OSP also introduces episodic memory and agentic mission orchestration. Detection events are persisted across orbital passes, enabling the system to identify recurring anomalies and reason temporally rather than treating every scene independently. A lightweight orbital mission controller autonomously performs retrieval, reasoning, uncertainty evaluation, and OVV scheduling through a structured detect → retrieve → reason → decide → log pipeline. This transforms the system from a passive detector into an active orbital intelligence agent capable of initiating follow-up actions.
+
+The overall architecture combines edge AI, multimodal perception, semantic compression, grounded LLM reasoning, and explainable decision-making into a unified Earth observation system. By coupling onboard multispectral inference with structured GenAI workflows, OSP demonstrates how modern satellite systems can evolve from raw imaging platforms into autonomous semantic intelligence infrastructure.

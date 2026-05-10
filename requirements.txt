@@ -26,9 +26,13 @@ folium>=0.16,<1.0
 streamlit-folium>=0.18,<1.0
 plotly>=5.20,<6.0
 
-# ── LLM reasoning layer (optional — only needed for ORION analyst) ───────────
+# ── LLM reasoning layer (ORION analyst — Gemini / OpenAI / Anthropic) ────────
 google-generativeai>=0.5,<1.0
 openai>=1.20,<2.0              # also covers Anthropic via OpenAI-compat endpoint
+
+# ── GenAI: RAG + Vector Store (rag/ module) ───────────────────────────────────
+faiss-cpu>=1.7,<2.0            # FAISS vector similarity search (CPU build)
+sentence-transformers>=2.7,<4.0  # Local embedding model (all-MiniLM-L6-v2)
 
 # ── Real data ingestion (optional — only needed for live Sentinel-2 data) ─────
 # rasterio>=1.3,<2.0           # uncomment to enable GeoTIFF loading
