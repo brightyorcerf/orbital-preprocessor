@@ -9,7 +9,7 @@ Run:
 Features:
   - Load live JSON payloads from /output/ (OrbitLab mount) or upload manually
   - 2D Folium map with tile footprint polygons + anomaly pins
-  - Per-anomaly confidence colour coding (green → red)
+  - Per-anomaly confidence colour coding
   - ORION GenAI Intelligence tab: RAG-grounded, memory-augmented LLM analysis
   - Agentic mission controller with structured decision log
   - Spectral explainability panel (per-band contribution analysis)
@@ -54,90 +54,251 @@ except ImportError:
 
 st.set_page_config(
     page_title="OSP Command Centre",
-    page_icon="🛰️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
+# ── Custom CSS & Styling ───────────────────────────────────────────────────────
+
+def get_base64_of_bin_file(bin_file):
+    try:
+        import base64
+        with open(bin_file, 'rb') as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return ""
+
+bg_path = Path(__file__).parent.parent / "background.jpg"
+bg_b64 = get_base64_of_bin_file(bg_path)
+bg_css = f"""
+    .stApp {{
+        background: radial-gradient(circle at top right, rgba(255,255,255,0.03), transparent 35%), linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.82)), url("data:image/jpeg;base64,{bg_b64}") no-repeat center center fixed;
+        background-size: cover;
+    }}
+""" if bg_b64 else """
+    .stApp { background-color: #000000; }
+"""
+
+st.markdown(f"""
 <style>
-    .main { background-color: #0a0e1a; color: #e2e8f0; }
-    .stApp { background-color: #0a0e1a; }
-    .metric-card {
-        background: #1e2a3a;
-        border-radius: 8px;
-        padding: 16px;
-        border-left: 3px solid #3b82f6;
-        margin-bottom: 8px;
-    }
-    .alert-red    { border-left-color: #ef4444 !important; }
-    .alert-orange { border-left-color: #f97316 !important; }
-    .alert-yellow { border-left-color: #eab308 !important; }
-    .alert-green  { border-left-color: #22c55e !important; }
-    .orion-brief {
-        background: #111827;
-        border-radius: 8px;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Titillium+Web:wght@300;400;600&display=swap');
+
+    html, body, [class*="css"] {{
+        font-family: 'Inter', sans-serif;
+        font-weight: 300;
+        color: #d4d4d4;
+    }}
+    h1, h2, h3, h4, h5, h6 {{
+        font-family: 'Titillium Web', sans-serif !important;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-weight: 300 !important;
+        color: #f5f5f5;
+    }}
+    
+    {bg_css}
+
+    /* Sidebar glassmorphism */
+    [data-testid="stSidebar"] {{
+        background-color: rgba(5, 5, 5, 0.75) !important;
+        border-right: 1px solid rgba(255,255,255,0.08);
+        backdrop-filter: blur(16px);
+    }}
+
+    /* Override Streamlit padding */
+    .block-container {{
+        padding-top: 2rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 96% !important;
+    }}
+
+    /* Tabs aerospace styling */
+    .stTabs [data-baseweb="tab-list"] {{
+        background-color: rgba(8, 8, 8, 0.55);
+        border-radius: 6px;
+        padding: 4px;
+        border: 1px solid rgba(255,255,255,0.08);
+    }}
+    .stTabs [data-baseweb="tab"] {{ color: #8b8b8b; }}
+    .stTabs [aria-selected="true"] {{
+        background-color: rgba(255, 255, 255, 0.05) !important;
+        color: #f5f5f5 !important;
+        border-radius: 4px;
+    }}
+
+    /* Glassmorphism System */
+    .glass-panel {{
+        background: rgba(12,12,12,0.62);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 6px;
         padding: 20px;
-        border: 1px solid #1f2937;
-        font-family: 'Courier New', monospace;
+        margin-bottom: 20px;
+        transition: all 0.3s ease;
+        box-shadow: inset 0 0 10px rgba(255,255,255,0.02);
+    }}
+    .glass-panel:hover {{
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: inset 0 0 10px rgba(255,255,255,0.05), 0 4px 20px rgba(0,0,0,0.5);
+    }}
+
+    .metric-card {{
+        background: rgba(8,8,8,0.55);
+        backdrop-filter: blur(18px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-left: 3px solid #8b8b8b;
+        border-radius: 4px;
+        padding: 12px 16px;
+        margin-bottom: 8px;
+    }}
+    .alert-red    {{ border-left-color: #d4d4d4 !important; }}
+    .alert-orange {{ border-left-color: #8b8b8b !important; }}
+    .alert-yellow {{ border-left-color: #f5f5f5 !important; }}
+    .alert-green  {{ border-left-color: #f5f5f5 !important; }}
+
+    /* Mission Strip */
+    .mission-strip {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        justify-content: space-between;
+        background: rgba(5, 5, 5, 0.8);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 6px;
+        padding: 16px 24px;
+        margin-bottom: 32px;
+        box-shadow: inset 0 0 10px rgba(255,255,255,0.02);
+    }}
+    .mission-stat {{
+        display: flex;
+        flex-direction: column;
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #8b8b8b;
+    }}
+    .mission-stat .val {{
+        font-weight: 400;
+        color: #f5f5f5;
+        font-size: 18px;
+        letter-spacing: 0.5px;
+    }}
+
+    /* Detections Timeline */
+    .timeline-item {{
+        border-left: 1px solid rgba(255, 255, 255, 0.2);
+        padding-left: 16px;
+        margin-bottom: 16px;
+        position: relative;
+    }}
+    .timeline-item::before {{
+        content: '';
+        position: absolute;
+        left: -4px;
+        top: 6px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #d4d4d4;
+        box-shadow: 0 0 8px rgba(255,255,255,0.5);
+    }}
+    .conf-bar-bg {{
+        background: rgba(255,255,255,0.1);
+        height: 3px;
+        border-radius: 2px;
+        width: 100%;
+        margin-top: 8px;
+    }}
+    .conf-bar-fg {{
+        height: 3px;
+        border-radius: 2px;
+    }}
+
+    .feed-title {{
+        margin-top: 0;
+        margin-bottom: 6px;
+        color: #f5f5f5;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        font-family: 'Titillium Web', sans-serif;
+        font-weight: 400;
+    }}
+
+    .feed-timestamp {{
+        color: #8b8b8b;
+        font-family: monospace;
+        font-size: 11px;
+        margin-bottom: 18px;
+    }}
+
+    /* ORION elements */
+    .orion-brief {{
+        background: rgba(8,8,8,0.7);
+        border-radius: 6px;
+        padding: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: 'Inter', sans-serif;
         font-size: 13px;
-    }
-    .reasoning-step {
-        background: #0f172a;
-        border-left: 2px solid #6366f1;
+    }}
+    .reasoning-step {{
+        background: rgba(12, 12, 12, 0.5);
+        border-left: 2px solid #8b8b8b;
         padding: 8px 12px;
         margin: 4px 0;
         border-radius: 0 4px 4px 0;
         font-size: 12px;
-        font-family: 'Courier New', monospace;
-    }
-    .band-bar {
-        height: 8px;
-        border-radius: 4px;
-        background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-        margin: 2px 0;
-    }
-    .genai-badge {
+        color: #d4d4d4;
+    }}
+    .genai-badge {{
         display: inline-block;
-        background: #1e1b4b;
-        border: 1px solid #6366f1;
+        background: rgba(20, 20, 20, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 4px;
         padding: 2px 8px;
         font-size: 11px;
-        color: #a5b4fc;
+        color: #d4d4d4;
         margin: 2px;
-    }
-    h1, h2, h3 { color: #93c5fd; }
-    .stButton>button { background: #1d4ed8; color: white; border: none; }
-    .stButton>button:hover { background: #2563eb; }
+    }}
+    .stButton>button {{ background: rgba(255, 255, 255, 0.05); color: #f5f5f5; border: 1px solid rgba(255, 255, 255, 0.2); backdrop-filter: blur(4px); font-family: 'Titillium Web'; text-transform: uppercase; letter-spacing: 1px; }}
+    .stButton>button:hover {{ background: rgba(255, 255, 255, 0.1); color: white; border-color: #f5f5f5; box-shadow: 0 0 10px rgba(255, 255, 255, 0.2); }}
 </style>
 """, unsafe_allow_html=True)
 
+# ── Render Helpers ────────────────────────────────────────────────────────────
+
+def render_timeline_card(cls_name: str, conf: float, lat: float, lon: float, color: str):
+    return f"""
+    <div class='timeline-item'>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong style="color:#f5f5f5; letter-spacing: 1px; text-transform: uppercase; font-family: 'Titillium Web', sans-serif;">{cls_name}</strong>
+            <span style="color:{color}; font-size:12px; font-family:monospace;">{conf:.0%} CONF</span>
+        </div>
+        <div style="color:#8b8b8b; font-size:11px; font-family:monospace; margin-top:4px;">
+            COORD: {lat:.5f}°N, {lon:.5f}°E
+        </div>
+        <div class="conf-bar-bg">
+            <div class="conf-bar-fg" style="width: {conf*100}%; background-color: {color}; box-shadow: 0 0 8px {color};"></div>
+        </div>
+    </div>
+    """
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 CONF_COLORS = {
-    (0.8, 1.0): "#ef4444",   # red   — high confidence
-    (0.6, 0.8): "#f97316",   # orange
-    (0.4, 0.6): "#eab308",   # yellow
-    (0.0, 0.4): "#22c55e",   # green — low confidence
+    (0.8, 1.0): "#d4d4d4",   
+    (0.6, 0.8): "#8b8b8b",   
+    (0.4, 0.6): "#f5f5f5",   
+    (0.0, 0.4): "#f5f5f5",   
 }
-
-CLASS_ICONS = {
-    "ship":         "🚢",
-    "airplane":     "✈️",
-    "storage-tank": "🛢️",
-    "harbor":       "⚓",
-}
-
 
 def conf_color(conf: float) -> str:
     for (lo, hi), color in CONF_COLORS.items():
         if lo <= conf <= hi:
             return color
-    return "#6b7280"
-
+    return "#8b8b8b"
 
 def load_payloads_from_dir(directory: str) -> list[dict]:
     payloads = []
@@ -148,10 +309,7 @@ def load_payloads_from_dir(directory: str) -> list[dict]:
             pass
     return payloads
 
-
 def build_folium_map(payloads: list[dict]) -> folium.Map:
-    """Build Folium map with tile footprints and anomaly markers."""
-
     # Centre on mean of all tile footprints
     all_lats = []
     all_lons = []
@@ -186,12 +344,12 @@ def build_folium_map(payloads: list[dict]) -> folium.Map:
             ]
             folium.Polygon(
                 locations=bounds,
-                color="#3b82f6",
+                color="#8b8b8b",
                 weight=1.5,
                 fill=True,
-                fill_color="#3b82f6",
+                fill_color="#8b8b8b",
                 fill_opacity=0.05,
-                tooltip=f"{scene_id} | ☁ {cloud:.0%} cloud",
+                tooltip=f"{scene_id} | CLOUD {cloud:.0%}",
             ).add_to(m)
 
         # ── Anomaly pins ───────────────────────────────────────────────────
@@ -199,16 +357,15 @@ def build_folium_map(payloads: list[dict]) -> folium.Map:
             lat, lon = a.get("lat_lon", [centre_lat, centre_lon])
             cls_name = a.get("type", "unknown")
             conf     = a.get("conf", 0)
-            icon_str = CLASS_ICONS.get(cls_name, "⚠️")
             color    = conf_color(conf)
 
             popup_html = f"""
-            <div style="font-family:monospace;font-size:12px;min-width:180px">
-                <b>{icon_str} {cls_name.upper()}</b><br>
-                Scene: {scene_id}<br>
-                Conf:  <b style="color:{color}">{conf:.0%}</b><br>
-                Lat:   {lat:.5f}°<br>
-                Lon:   {lon:.5f}°<br>
+            <div style="font-family:monospace;font-size:12px;min-width:180px;color:#f5f5f5;background:#050505;">
+                <b style="text-transform:uppercase;">{cls_name}</b><br>
+                SCENE: {scene_id}<br>
+                CONF:  <b style="color:{color}">{conf:.0%}</b><br>
+                LAT:   {lat:.5f}°<br>
+                LON:   {lon:.5f}°<br>
             </div>
             """
 
@@ -225,7 +382,6 @@ def build_folium_map(payloads: list[dict]) -> folium.Map:
 
     folium.LayerControl().add_to(m)
     return m
-
 
 # ── Demo payload generator ────────────────────────────────────────────────────
 
@@ -249,41 +405,38 @@ def make_demo_payload() -> dict:
                  "compression_ratio": 85000},
     }
 
-
 # ── Main UI ───────────────────────────────────────────────────────────────────
 
 def main():
-    # Header
-    st.markdown("# 🛰️ OSP Command Centre")
-    st.markdown("**Orbital Scene Preprocessor** — MOI-1A Situational Awareness")
-    st.divider()
+    st.markdown("<h2 style='margin-top:0;'>OSP COMMAND CENTRE</h2>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#8b8b8b; margin-bottom: 24px; font-family: \"Titillium Web\", sans-serif; letter-spacing: 1px; text-transform: uppercase;'>Orbital Scene Preprocessor — MOI-1A Situational Awareness</div>", unsafe_allow_html=True)
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
-        st.markdown("### ⚙️ Configuration")
+        st.markdown("### MISSION CONFIG")
 
         data_source = st.radio(
-            "Data source",
+            "Telemetry Link",
             ["Demo payload", "Upload JSON", "Load from /output/"],
             index=0,
         )
 
         st.divider()
-        st.markdown("### 🤖 ORION Analyst")
+        st.markdown("### ORION AGENT")
         run_llm   = st.toggle("Enable LLM analysis", value=False)
         llm_provider = st.selectbox("Provider", ["gemini", "anthropic", "openai"])
         api_key_input = st.text_input(
-            "API Key (or set env var)",
+            "API Key (or env var)",
             type="password",
             placeholder="Leave blank to use env var",
         )
 
         st.divider()
-        st.markdown("### 📡 OVV Control")
+        st.markdown("### OVV UPLINK")
         ovv_target_lat = st.number_input("Target Lat", value=8.412, format="%.5f")
         ovv_target_lon = st.number_input("Target Lon", value=77.821, format="%.5f")
         ovv_reason     = st.selectbox("Reason", ["high_uncertainty", "anomaly_cluster", "manual_verify"])
-        send_ovv       = st.button("📡 Send OVV Request")
+        send_ovv       = st.button("SEND OVV REQUEST")
 
     # ── Load data ─────────────────────────────────────────────────────────────
     payloads = []
@@ -315,18 +468,27 @@ def main():
         st.info("No payloads loaded. Select a data source in the sidebar.")
         return
 
-    # ── Stats row ─────────────────────────────────────────────────────────────
+    # ── Mission Status Strip ──────────────────────────────────────────────────
     total_anomalies = sum(p.get("anomaly_count", 0) for p in payloads)
     avg_ms     = sum(p.get("meta", {}).get("inference_ms", 0) for p in payloads) / len(payloads)
     avg_cloud  = sum(p.get("cloud_cover", 0) for p in payloads) / len(payloads)
     comp_ratio = payloads[0].get("meta", {}).get("compression_ratio", 85000)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🔍 Total Anomalies",   total_anomalies)
-    c2.metric("⏱️ Avg Inference",     f"{avg_ms:.0f} ms",
-              delta="✓ <800ms" if avg_ms < 800 else "⚠ >800ms")
-    c3.metric("☁️ Avg Cloud Cover",   f"{avg_cloud:.0%}")
-    c4.metric("📦 Compression Ratio", f"{comp_ratio:,}:1")
+    status_color = "#f5f5f5" if total_anomalies > 0 else "#8b8b8b"
+    status_text = "ANOMALY DETECTED" if total_anomalies > 0 else "NOMINAL"
+
+    st.markdown(
+        f"""
+        <div class="mission-strip">
+            <div class="mission-stat">Mission State <span class="val" style="color:{status_color}">{status_text}</span></div>
+            <div class="mission-stat">Active Node <span class="val">MOI-1A ORBITAL</span></div>
+            <div class="mission-stat">Total Anomalies <span class="val">{total_anomalies}</span></div>
+            <div class="mission-stat">Inference Time <span class="val">{avg_ms:.0f} ms</span></div>
+            <div class="mission-stat">Cloud Cover <span class="val">{avg_cloud:.0%}</span></div>
+            <div class="mission-stat">Compression <span class="val">{comp_ratio:,}:1</span></div>
+        </div>
+        """, unsafe_allow_html=True
+    )
 
     st.divider()
 
@@ -334,15 +496,15 @@ def main():
     map_col, data_col = st.columns([3, 2])
 
     with map_col:
-        tab1, tab2 = st.tabs(["🗺️ Tactical 2D", "🌍 Strategic 3D"])
+        tab1, tab2 = st.tabs(["TACTICAL 2D", "STRATEGIC 3D"])
         
         with tab1:
-            st.markdown("### 🗺️ 2D Situational Awareness")
+            st.markdown("### 2D SITUATIONAL AWARENESS")
             fmap = build_folium_map(payloads)
             st_data = st_folium(fmap, width=700, height=500, returned_objects=["last_object_clicked"])
             
         with tab2:
-            st.markdown("### 🌍 3D Situational Awareness")
+            st.markdown("### 3D SITUATIONAL AWARENESS")
             center_lat, center_lon = 8.5, 77.5
             if st_data and st_data.get("last_object_clicked"):
                 center_lat = st_data["last_object_clicked"]["lat"]
@@ -351,41 +513,43 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
     with data_col:
-        st.markdown("### 📋 Detections")
+        st.markdown("### INTELLIGENCE FEED")
 
         for payload in payloads:
             scene_id  = payload.get("scene_id", "?")
             ts        = payload.get("timestamp_utc", "")[:19].replace("T", " ")
             anomalies = payload.get("anomalies", [])
-            cloud     = payload.get("cloud_cover", 0)
-            inf_ms    = payload.get("meta", {}).get("inference_ms", 0)
-
-            with st.expander(
-                f"🛰️ {scene_id} | {len(anomalies)} detections | {ts}",
-                expanded=True,
-            ):
-                col_a, col_b = st.columns(2)
-                col_a.caption(f"☁️ Cloud: {cloud:.0%}")
-                col_b.caption(f"⏱️ {inf_ms:.0f} ms")
-
-                if not anomalies:
-                    st.success("No anomalies detected.")
-                else:
-                    for a in anomalies:
-                        cls  = a.get("type", "?")
-                        conf = a.get("conf", 0)
-                        ll   = a.get("lat_lon", [0, 0])
-                        icon = CLASS_ICONS.get(cls, "⚠️")
-                        col  = conf_color(conf)
-
-                        st.markdown(
-                            f"<div class='metric-card'>"
-                            f"<b>{icon} {cls.upper()}</b>&nbsp;&nbsp;"
-                            f"<span style='color:{col}'>{conf:.0%} conf</span><br>"
-                            f"<small>📍 {ll[0]:.4f}°, {ll[1]:.4f}°</small>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
+            
+            cards_html = ""
+            
+            if not anomalies:
+                cards_html = "<div style='color:#8b8b8b; font-family:monospace; font-size:12px;'>NO ANOMALIES DETECTED IN SECTOR.</div>"
+            else:
+                for a in anomalies:
+                    cls  = a.get("type", "unknown")
+                    conf = a.get("conf", 0)
+                    ll   = a.get("lat_lon", [0, 0])
+                    color = conf_color(conf)
+                    
+                    cards_html += render_timeline_card(
+                        cls,
+                        conf,
+                        ll[0],
+                        ll[1],
+                        color
+                    )
+            
+            full_html = f"""
+            <div class="glass-panel">
+                <h4 class="feed-title">{scene_id}</h4>
+                <div class="feed-timestamp">
+                    ORBITAL TIMESTAMP: {ts} UTC
+                </div>
+                {cards_html}
+            </div>
+            """
+            
+            st.markdown(full_html, unsafe_allow_html=True)
 
     # ── OVV command ────────────────────────────────────────────────────────────
     if send_ovv:
@@ -404,7 +568,7 @@ def main():
             "payload_format": "256x256_crop_base64",
         }
         st.divider()
-        st.markdown("### 📡 OVV Command Sent")
+        st.markdown("### OVV COMMAND SENT")
         oc1, oc2 = st.columns(2)
         with oc1:
             st.markdown("**Request (Ground → Satellite)**")
@@ -416,7 +580,7 @@ def main():
     # ── ORION LLM analysis ────────────────────────────────────────────────────
     if run_llm:
         st.divider()
-        st.markdown("### 🤖 ORION Intelligence Brief")
+        st.markdown("### ORION INTELLIGENCE BRIEF")
 
         key = api_key_input or os.environ.get("GEMINI_API_KEY", "")
 
@@ -438,7 +602,7 @@ def main():
 
                     st.markdown(
                         f"<div class='metric-card {alert_class}'>"
-                        f"<b>🛰️ {payload.get('scene_id')} — "
+                        f"<b>{payload.get('scene_id')} — "
                         f"<span style='color:{color}'>{level}</span></b>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -451,11 +615,11 @@ def main():
                             for aa in brief["anomaly_assessments"]:
                                 risk = aa.get("risk_tier", "")
                                 risk_color = {
-                                    "CRITICAL": "#ef4444",
-                                    "HIGH":     "#f97316",
-                                    "MEDIUM":   "#eab308",
-                                    "LOW":      "#22c55e",
-                                }.get(risk, "#6b7280")
+                                    "CRITICAL": "#d4d4d4",
+                                    "HIGH":     "#8b8b8b",
+                                    "MEDIUM":   "#f5f5f5",
+                                    "LOW":      "#f5f5f5",
+                                }.get(risk, "#8b8b8b")
                                 st.markdown(
                                     f"**{aa.get('type', '').upper()}** — "
                                     f"<span style='color:{risk_color}'>{risk}</span> risk<br>"
@@ -466,7 +630,7 @@ def main():
                     if brief.get("ovv_recommendation", {}).get("trigger"):
                         ovv_rec = brief["ovv_recommendation"]
                         st.warning(
-                            f"📡 OVV Recommended (priority {ovv_rec.get('priority', '?')}): "
+                            f"OVV Recommended (priority {ovv_rec.get('priority', '?')}): "
                             f"{ovv_rec.get('reason', '')}"
                         )
 
@@ -480,7 +644,7 @@ def main():
 
     # ── ORION GenAI Agent ─────────────────────────────────────────────────────
     st.divider()
-    st.markdown("### 🤖 ORION GenAI Intelligence Agent")
+    st.markdown("### ORION GENAI INTELLIGENCE AGENT")
 
     col_gen1, col_gen2 = st.columns([1, 1])
     with col_gen1:
@@ -492,10 +656,10 @@ def main():
     with col_gen2:
         if _AGENT_AVAILABLE:
             st.markdown(
-                "<span class='genai-badge'>🔗 RAG</span>"
-                "<span class='genai-badge'>🧠 Memory</span>"
-                "<span class='genai-badge'>🤖 LLM Reasoning</span>"
-                "<span class='genai-badge'>⚡ Agentic Loop</span>",
+                "<span class='genai-badge'>RAG</span>"
+                "<span class='genai-badge'>MEMORY</span>"
+                "<span class='genai-badge'>LLM REASONING</span>"
+                "<span class='genai-badge'>AGENTIC LOOP</span>",
                 unsafe_allow_html=True,
             )
         else:
@@ -507,7 +671,7 @@ def main():
             st.error("API key required. Set GEMINI_API_KEY or enter it in the sidebar.")
         else:
             payload_for_agent = payloads[0]
-            with st.spinner("🛰️ Running ORION Mission Cycle (RAG → Memory → Reason → Decide) ..."):
+            with st.spinner("Running ORION Mission Cycle (RAG → Memory → Reason → Decide) ..."):
                 try:
                     agent = MissionController(
                         provider=llm_provider,
@@ -524,11 +688,11 @@ def main():
 
                     narrative = cycle_result.llm_brief.get("scene_narrative", "")
                     if narrative:
-                        st.info(f"📝 **Orbital Narrative:** {narrative}")
+                        st.info(f"**Orbital Narrative:** {narrative}")
 
                     reasoning_trace = cycle_result.llm_brief.get("reasoning_trace", [])
                     if reasoning_trace:
-                        st.markdown("**🧠 ORION Reasoning Trace**")
+                        st.markdown("**ORION REASONING TRACE**")
                         for i, step in enumerate(reasoning_trace, 1):
                             st.markdown(
                                 f"<div class='reasoning-step'>[{i}] {step}</div>",
@@ -538,25 +702,25 @@ def main():
                     evidence = cycle_result.llm_brief.get("evidence_used", [])
                     if evidence:
                         st.markdown(
-                            "**📚 Knowledge Sources:** "
+                            "**KNOWLEDGE SOURCES:** "
                             + " ".join(f"<span class='genai-badge'>{e}</span>" for e in evidence),
                             unsafe_allow_html=True,
                         )
 
                     if cycle_result.llm_brief.get("anomaly_assessments"):
-                        with st.expander("🔍 RAG-Grounded Anomaly Assessments", expanded=True):
+                        with st.expander("RAG-Grounded Anomaly Assessments", expanded=True):
                             for aa in cycle_result.llm_brief["anomaly_assessments"]:
                                 risk = aa.get("risk_tier", "")
                                 risk_color = {
-                                    "CRITICAL": "#ef4444", "HIGH": "#f97316",
-                                    "MEDIUM": "#eab308",   "LOW":  "#22c55e",
-                                }.get(risk, "#6b7280")
+                                    "CRITICAL": "#d4d4d4", "HIGH": "#8b8b8b",
+                                    "MEDIUM": "#f5f5f5",   "LOW":  "#f5f5f5",
+                                }.get(risk, "#8b8b8b")
                                 st.markdown(
                                     f"**{aa.get('type','?').upper()}** — "
                                     f"<span style='color:{risk_color}'>{risk}</span> risk | "
                                     f"conf={aa.get('conf',0):.0%}<br>"
                                     f"{aa.get('reasoning','')}<br>"
-                                    f"<i style='color:#9ca3af'>{aa.get('spectral_notes','')}</i>",
+                                    f"<i style='color:#8b8b8b'>{aa.get('spectral_notes','')}</i>",
                                     unsafe_allow_html=True,
                                 )
                                 unc = aa.get("uncertainty_factors", [])
@@ -565,19 +729,19 @@ def main():
                                 st.markdown("---")
 
                     if cycle_result.decision.ovv_requests:
-                        st.markdown("**📡 Autonomous OVV Schedule**")
+                        st.markdown("**AUTONOMOUS OVV SCHEDULE**")
                         for ovv in cycle_result.decision.ovv_requests:
-                            src_color = "#6366f1" if ovv.source == "llm" else "#3b82f6"
+                            src_color = "#d4d4d4" if ovv.source == "llm" else "#8b8b8b"
                             st.markdown(
                                 f"<div class='metric-card'>"
                                 f"<b>{ovv.request_id}</b> | Priority {ovv.priority} | "
                                 f"<span style='color:{src_color}'>{ovv.source.upper()}-triggered</span><br>"
-                                f"📍 ({ovv.target_coords[0]:.4f}°, {ovv.target_coords[1]:.4f}°)<br>"
+                                f"COORD: {ovv.target_coords[0]:.4f}°N, {ovv.target_coords[1]:.4f}°E<br>"
                                 f"<small>{ovv.reason}</small></div>",
                                 unsafe_allow_html=True,
                             )
 
-                    with st.expander("📋 Full Mission Decision Log"):
+                    with st.expander("FULL MISSION DECISION LOG"):
                         st.code(cycle_result.mission_log, language="text")
 
                 except Exception as e:
@@ -585,7 +749,7 @@ def main():
 
     # ── Spectral Explainability ───────────────────────────────────────────────
     if _EXPLAINABILITY_AVAILABLE and payloads:
-        with st.expander("🔬 Spectral Explainability — Uncertainty Analysis"):
+        with st.expander("SPECTRAL EXPLAINABILITY — UNCERTAINTY ANALYSIS"):
             payload_ex   = payloads[0]
             anomalies_ex = payload_ex.get("anomalies", [])
             uncertainty_est = UncertaintyEstimator()
@@ -594,7 +758,7 @@ def main():
             st.markdown(f"**Sensing Quality: {u_report.overall_quality:.0%}**")
             st.progress(u_report.overall_quality)
             for factor in u_report.factors:
-                st.caption(f"⚠️ {factor}")
+                st.caption(f"- {factor}")
             for rec in u_report.recommendations:
                 st.caption(f"→ {rec}")
             if u_report.band_quality:
@@ -606,7 +770,7 @@ def main():
 
     # ── Scene Memory Timeline ─────────────────────────────────────────────────
     if _MEMORY_AVAILABLE:
-        with st.expander("🕐 Scene Memory — Orbital Pass History"):
+        with st.expander("SCENE MEMORY — ORBITAL PASS HISTORY"):
             try:
                 memory    = get_memory()
                 m1, m2    = st.columns(2)
@@ -616,9 +780,9 @@ def main():
                 if timeline:
                     for entry in timeline:
                         alert = entry.get("alert_level", "?")
-                        icon  = {"RED": "🔴","ORANGE":"🟠","YELLOW":"🟡","GREEN":"🟢"}.get(alert,"⚪")
+                        icon  = {"RED": "[!]","ORANGE":"[*]","YELLOW":"[-]","GREEN":"[+]"}
                         st.markdown(
-                            f"{icon} **{entry['scene_id']}** | "
+                            f"{icon.get(alert, '[?]')} **{entry['scene_id']}** | "
                             f"{entry['timestamp_utc'][:16]} UTC | "
                             f"{entry['anomaly_count']} anomaly(s) | Alert: {alert or 'N/A'}"
                         )
@@ -633,9 +797,8 @@ def main():
     st.divider()
     st.caption(
         "OSP Command Centre · MOI-1A · TakeMe2Space · "
-        "GenAI: Edge AI + RAG + Memory + Agentic Loop 🛰️"
+        "GenAI: Edge AI + RAG + Memory + Agentic Loop"
     )
-
 
 if __name__ == "__main__":
     main()
