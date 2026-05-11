@@ -253,7 +253,7 @@ class MissionController:
         t0 = time.perf_counter()
 
         scene_id      = payload.get("scene_id", "UNKNOWN")
-        timestamp_utc = payload.get("timestamp_utc", datetime.datetime.utcnow().isoformat() + "Z")
+        timestamp_utc = payload.get("timestamp_utc", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         anomalies     = payload.get("anomalies", [])
         payload_json  = json.dumps(payload)
 
@@ -550,7 +550,7 @@ if __name__ == "__main__":
 
     sample_payload = {
         "scene_id": "OSP-AGENT-DEMO",
-        "timestamp_utc": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0,
                            "lon_min": 77.0, "lon_max": 78.0},
         "cloud_cover": 0.12,

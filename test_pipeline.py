@@ -715,8 +715,8 @@ def test_full_pipeline():
     json_bytes_pre = 1200  # placeholder for ratio calculation
 
     payload = OSPPayload(
-        scene_id       = "OSP-E2E-" + datetime.datetime.utcnow().strftime("%H%M%S"),
-        timestamp_utc  = datetime.datetime.utcnow().isoformat() + "Z",
+        scene_id       = "OSP-E2E-" + datetime.datetime.now(datetime.timezone.utc).strftime("%H%M%S"),
+        timestamp_utc  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         tile_footprint = FOOTPRINT,
         cloud_cover    = cloud,
         anomalies      = anomalies,

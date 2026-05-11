@@ -397,7 +397,7 @@ if __name__ == "__main__":
     # Seed with 3 fake historical passes
     for i in range(3):
         ts = (
-            datetime.datetime.utcnow() - datetime.timedelta(hours=92 * (i + 1))
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=92 * (i + 1))
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         fake_payload = {
