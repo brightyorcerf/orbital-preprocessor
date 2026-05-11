@@ -602,7 +602,8 @@ def test_semantic_integrity():
         assert a["type"] in {"ship", "airplane", "storage-tank", "harbor", "unknown"}
 
     # ── Step 4: construct the actual ORION prompt (same as llm_analyst.py) ───
-    from ground.llm_analyst import ANALYST_SYSTEM_PROMPT, build_user_message
+    from ground.llm_analyst import ANALYST_SYSTEM_PROMPT_V2 as ANALYST_SYSTEM_PROMPT
+    from ground.llm_analyst import build_user_message_v2 as build_user_message
 
     user_msg = build_user_message(json_str)
 
