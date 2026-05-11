@@ -3,7 +3,7 @@ from ultralytics import YOLO
 
 # 1. Load your 6-channel hacked model
 # We use the internal .model because we only need the computation graph
-model_wrapper = YOLO('yolov8n_6ch.pt')
+model_wrapper = YOLO('model/artifacts/yolov8n_6ch.pt')
 model = model_wrapper.model.fuse().eval()  # Fuse layers for satellite efficiency
 
 # 2. Create a 6-channel dummy tensor (B2, B3, B4, B8, B11, B12)
