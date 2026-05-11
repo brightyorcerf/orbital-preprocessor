@@ -27,7 +27,7 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
-from globe import build_globe
+from ground.globe import build_globe
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
