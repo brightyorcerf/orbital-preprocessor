@@ -390,7 +390,7 @@ def make_demo_payload() -> dict:
     rng = random.Random(42)
     return {
         "scene_id": "OSP-A3F2C1B4",
-        "timestamp_utc": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0,
                            "lon_min": 77.0, "lon_max": 78.0},
         "cloud_cover": 0.08,
@@ -588,7 +588,7 @@ def main():
             with st.spinner(f"Analysing {payload.get('scene_id', i+1)} ..."):
                 try:
                     sys.path.insert(0, str(Path(__file__).parent))
-                    from llm_analyst import OrbitalAnalyst
+                    from ground.llm_analyst import OrbitalAnalyst
 
                     analyst = OrbitalAnalyst(
                         provider=llm_provider,
