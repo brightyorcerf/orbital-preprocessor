@@ -56,6 +56,12 @@ yolov8n.pt
 # Uncommenting this will require running compile_proto.sh on every clone:
 # inference/osp_pb2.py
 
+# --- RAG Vector Store (auto-generated at runtime, do not commit) ---
+rag/vector_store/
+
+# --- Scene Memory DB (runtime state, do not commit) ---
+ground/osp_memory.db
+
 # --- Misc ---
 globe.html
 *.npy
