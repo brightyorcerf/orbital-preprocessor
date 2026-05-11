@@ -99,9 +99,9 @@ def rgb_to_6band(rgb_img: np.ndarray) -> np.ndarray:
     b = rgb[:, :, 2]
 
     # ── Visible bands (B2, B3, B4) ────────────────────────────────────────────
-    b2 = r                                           # Blue  (using R slot)
-    b3 = g                                           # Green
-    b4 = b                                           # Red   (using B slot)
+    b2 = b   # B2 (Blue) <- blue channel
+    b3 = g   # B3 (Green) <- green channel
+    b4 = r   # B4 (Red) <- red channel
 
     # ── NIR (B8) ──────────────────────────────────────────────────────────────
     # Vegetation has high NIR → weigh green more; ocean/bare soil stays low.
