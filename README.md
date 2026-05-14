@@ -2,6 +2,8 @@
 
 > Target Platform: MOI-1A (100TOPS GPU / 4GB VRAM / OrbitLab Environment)
 
+![img.jpg](img.jpg)
+
 ---
 
 ## 1. Executive Summary: "The Semantic Gateway"
