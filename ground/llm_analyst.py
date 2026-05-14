@@ -177,7 +177,7 @@ def generate_scene_narrative(payload: dict, brief: dict) -> str:
 
 def call_gemini(
     payload_json: str,
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-1.5-flash",
     api_key: Optional[str] = None,
     rag_context: str = "",
     historical_context: str = "",
@@ -315,7 +315,7 @@ class OrbitalAnalyst:
             "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
         )
         self.model = model or (
-            "gemini-2.0-flash"              if provider == "gemini"    else
+            "gemini-1.5-pro"                if provider == "gemini"    else
             "gpt-4o-mini"                   if provider == "openai"    else
             "claude-3-5-sonnet-20241022"
         )

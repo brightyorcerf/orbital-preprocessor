@@ -116,6 +116,10 @@ dataset_6ch.py: Custom data loader designed to handle 6-channel multispectral im
 eval_suite.py: The "LLM-as-a-Judge" framework that evaluates grounding accuracy and catches hallucinations.
 globe.py: Script to render the 3D orbital globe visualization for the dashboard.
 llm_analyst.py: The ground-side wrapper for Gemini 1.5 Pro that performs risk-weighted reasoning.
+    - Context Injection (RAG): It searches a local maritime database for facts about the area the satellite just imaged. If a ship is detected near a protected reef, the LLM "knows" - the reef is there because of this script.
+    - Scene Memory: It looks at previous passes. If the satellite sees a ship today where it saw one yesterday, this script tells the LLM: "This is a recurring pattern, escalate to Orange alert."
+    - Spectral Reasoning: It teaches the LLM how to interpret satellite bands (like SWIR B11/B12) to see through haze—mimicking a human imagery analyst.
+    - Semantic Compression: It takes a tiny JSON (1.2KB) and expands it into a full human-readable report, explaining why a certain risk level was chosen.
 osp_memory.db: SQLite database that persists detection events and episodic memory across orbital passes.
 scene_memory.py: Logic for managing temporal reasoning and identifying recurring maritime anomalies.
 synth_demo.py: Utility to simulate ground-side reception of satellite telemetry for testing.
