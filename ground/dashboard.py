@@ -274,20 +274,18 @@ st.markdown(f"""
 # ── Render Helpers ────────────────────────────────────────────────────────────
 
 def render_timeline_card(cls_name: str, conf: float, lat: float, lon: float, color: str):
-    return f"""
-    <div class='timeline-item'>
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <strong style="color:#f5f5f5; letter-spacing: 1px; text-transform: uppercase; font-family: 'Titillium Web', sans-serif;">{cls_name}</strong>
-            <span style="color:{color}; font-size:12px; font-family:monospace;">{conf:.0%} CONF</span>
-        </div>
-        <div style="color:#8b8b8b; font-size:11px; font-family:monospace; margin-top:4px;">
-            COORD: {lat:.5f}°N, {lon:.5f}°E
-        </div>
-        <div class="conf-bar-bg">
-            <div class="conf-bar-fg" style="width: {conf*100}%; background-color: {color}; box-shadow: 0 0 8px {color};"></div>
-        </div>
-    </div>
-    """
+    return f"""<div class='timeline-item'>
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<strong style="color:#f5f5f5; letter-spacing: 1px; text-transform: uppercase; font-family: 'Titillium Web', sans-serif;">{cls_name}</strong>
+<span style="color:{color}; font-size:12px; font-family:monospace;">{conf:.0%} CONF</span>
+</div>
+<div style="color:#8b8b8b; font-size:11px; font-family:monospace; margin-top:4px;">
+COORD: {lat:.5f}°N, {lon:.5f}°E
+</div>
+<div class="conf-bar-bg">
+<div class="conf-bar-fg" style="width: {conf*100}%; background-color: {color}; box-shadow: 0 0 8px {color};"></div>
+</div>
+</div>"""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -505,7 +503,7 @@ def main():
         with tab1:
             st.markdown("### 2D SITUATIONAL AWARENESS")
             fmap = build_folium_map(payloads)
-            st_data = st_folium(fmap, width=700, height=500, returned_objects=["last_object_clicked"])
+            st_data = st_folium(fmap, width=700, height=500, returned_objects=["last_object_clicked"], use_container_width=True)
             
         with tab2:
             st.markdown("### 3D SITUATIONAL AWARENESS")
@@ -543,15 +541,11 @@ def main():
                         color
                     )
             
-            full_html = f"""
-            <div class="glass-panel">
-                <h4 class="feed-title">{scene_id}</h4>
-                <div class="feed-timestamp">
-                    ORBITAL TIMESTAMP: {ts} UTC
-                </div>
-                {cards_html}
-            </div>
-            """
+            full_html = f"""<div class="glass-panel">
+<h4 class="feed-title">{scene_id}</h4>
+<div class="feed-timestamp">ORBITAL TIMESTAMP: {ts} UTC</div>
+{cards_html}
+</div>"""
             
             st.markdown(full_html, unsafe_allow_html=True)
 

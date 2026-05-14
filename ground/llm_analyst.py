@@ -56,7 +56,8 @@ SWIR physics: B11/B12 provide strong metallic contrast even through haze. \
 Low confidence + SWIR anomaly = treat as medium confidence. \
 Cloud cover > 30% degrades visible bands — do not downgrade alert level for cloud.
 
-Output ONLY valid JSON. No markdown, no preamble, no explanation outside the JSON.
+Output ONLY valid JSON. No markdown fences (```json), no preamble, no explanation outside the JSON.
+CRITICAL: Ensure your JSON is completely valid, well-formed, and not truncated. Escape all double quotes inside string values.
 
 JSON schema you MUST return:
 {
@@ -205,8 +206,7 @@ def call_gemini(
     generation_config = genai.GenerationConfig(
         temperature=0.1,     # Low temp: deterministic structured output
         top_p=0.95,
-        max_output_tokens=2048,   # increased for reasoning trace
-        response_mime_type="application/json",
+        max_output_tokens=4096,   # increased for reasoning trace
     )
 
     gemini_model = genai.GenerativeModel(
@@ -263,15 +263,19 @@ def call_openai_compatible(
 # ── JSON parser ───────────────────────────────────────────────────────────────
 
 def _parse_llm_json(raw: str) -> dict:
-    """Strip ```json fences if present, then parse."""
-    cleaned = raw
+    """Extract JSON object and parse it."""
+    cleaned = raw.strip()
+    # Strip markdown code blocks if the LLM hallucinated them
     if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        cleaned = "\n".join(
-            line for line in lines
-            if not line.strip().startswith("```")
-        )
-    cleaned = cleaned.strip()
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    
+    # Try to extract just the JSON object if there's trailing/leading text
+    start_idx = cleaned.find('{')
+    end_idx = cleaned.rfind('}')
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        cleaned = cleaned[start_idx:end_idx+1]
 
     try:
         return json.loads(cleaned)
