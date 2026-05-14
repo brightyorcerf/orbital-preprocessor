@@ -57,7 +57,8 @@ Low confidence + SWIR anomaly = treat as medium confidence. \
 Cloud cover > 30% degrades visible bands — do not downgrade alert level for cloud.
 
 Output ONLY valid JSON. No markdown fences (```json), no preamble, no explanation outside the JSON.
-CRITICAL: Ensure your JSON is completely valid, well-formed, and not truncated. Escape all double quotes inside string values.
+CRITICAL INSTRUCTION 1: Never use double quotes (") inside your text values. Use single quotes (') instead to avoid breaking the JSON.
+CRITICAL INSTRUCTION 2: Ensure your JSON is completely valid, well-formed, and not truncated. The output MUST end with a closing brace '}'.
 
 JSON schema you MUST return:
 {
@@ -282,17 +283,44 @@ def _parse_llm_json(raw: str) -> dict:
     except json.JSONDecodeError as e:
         log.error(f"LLM output is not valid JSON: {e}")
         log.debug(f"Raw LLM output:\n{raw}")
-        return {
+        
+        # Regex fallback to salvage as much as possible for the dashboard
+        import re
+        fallback = {
             "alert_level": "UNKNOWN",
-            "summary": f"LLM parse error: {e}",
-            "scene_narrative": "Analysis unavailable due to parse error.",
+            "summary": f"Parse error ({e}). Salvaged data shown.",
+            "scene_narrative": "Partial analysis recovered.",
             "reasoning_trace": [],
             "anomaly_assessments": [],
             "evidence_used": [],
             "ovv_recommendation": {"trigger": False, "reason": "parse error", "priority": 5},
-            "bandwidth_note": "Parse error — raw text logged.",
+            "bandwidth_note": "Recovered via regex fallback.",
             "_raw": raw[:500],
         }
+        
+        al_match = re.search(r'"alert_level"\s*:\s*"([^"]+)"', raw)
+        if al_match: fallback["alert_level"] = al_match.group(1)
+        
+        sum_match = re.search(r'"summary"\s*:\s*"([^"]+)"', raw)
+        if sum_match: fallback["summary"] = sum_match.group(1)
+        
+        nar_match = re.search(r'"scene_narrative"\s*:\s*"([^"]+)"', raw)
+        if nar_match: fallback["scene_narrative"] = nar_match.group(1)
+        
+        # Attempt to recover anomaly assessments if present
+        if '"anomaly_assessments"' in raw and '"type"' in raw:
+            types = re.findall(r'"type"\s*:\s*"([^"]+)"', raw)
+            risks = re.findall(r'"risk_tier"\s*:\s*"([^"]+)"', raw)
+            for i in range(min(len(types), 3)):
+                risk = risks[i] if i < len(risks) else "UNKNOWN"
+                fallback["anomaly_assessments"].append({
+                    "type": types[i],
+                    "risk_tier": risk,
+                    "reasoning": "Recovered from malformed JSON stream.",
+                    "conf": 0.5
+                })
+                
+        return fallback
 
 
 # ── Main entry ────────────────────────────────────────────────────────────────
