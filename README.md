@@ -129,3 +129,10 @@ The project incorporates Retrieval-Augmented Generation (RAG) to reduce hallucin
 OSP also introduces episodic memory and agentic mission orchestration. Detection events are persisted across orbital passes, enabling the system to identify recurring anomalies and reason temporally rather than treating every scene independently. A lightweight orbital mission controller autonomously performs retrieval, reasoning, uncertainty evaluation, and OVV scheduling through a structured detect → retrieve → reason → decide → log pipeline. This transforms the system from a passive detector into an active orbital intelligence agent capable of initiating follow-up actions.
 
 The overall architecture combines edge AI, multimodal perception, semantic compression, grounded LLM reasoning, and explainable decision-making into a unified Earth observation system. By coupling onboard multispectral inference with structured GenAI workflows, OSP demonstrates how modern satellite systems can evolve from raw imaging platforms into autonomous semantic intelligence infrastructure.
+
+We also implemented the "LLM-as-a-Judge" / Evaluation Loop framework to evaluate Grounding Accuracy (Faithfulness).
+
+- Ground Truth Verification: It calculates the precise number of anomalies reported by the initial telemetry payload (the JSON data).
+- LLM Report Extraction: It parses the LLM's returned JSON dictionary (specifically focusing on the anomaly_assessments array output by llm_analyst.py) to see what ORION actually reported.
+- Faithfulness Evaluation: It directly contrasts the two outputs. If the LLM misses an anomaly, it fails with "Omission (Under-reporting)". If the LLM generates a non-existent anomaly, it fails with "Hallucination (Over-reporting)".
+- Accuracy Score: It returns 1.0 if faithful, and 0.0 if any hallucination/omission occurs, directly feeding the metric for your "End-to-End Metrics" slide.
