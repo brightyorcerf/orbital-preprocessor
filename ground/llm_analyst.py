@@ -206,6 +206,7 @@ def call_gemini(
         temperature=0.1,     # Low temp: deterministic structured output
         top_p=0.95,
         max_output_tokens=2048,   # increased for reasoning trace
+        response_mime_type="application/json",
     )
 
     gemini_model = genai.GenerativeModel(
