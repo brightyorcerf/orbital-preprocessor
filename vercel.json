@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "builds": [
+        {
+            "src": "api/index.py",
+            "use": "@vercel/python"
+        }
+    ],
+    "rewrites": [
+        {
+            "source": "/(.*)",
+            "destination": "/api/index.py"
+        }
+    ]
+}
