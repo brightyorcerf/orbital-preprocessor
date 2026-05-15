@@ -1,13 +1,15 @@
-# 🛰️ Orbital Scene Preprocessor
+# Orbital Scene Preprocessor
 
-> Target Platform: MOI-1A (100TOPS GPU / 4GB VRAM / OrbitLab Environment)
+> https://osp-command-centre.streamlit.app/
 
 ![img.jpg](img.jpg)
 
 ---
 
-## 1. Executive Summary: "The Semantic Gateway"
-OSP transforms MOI-1A from a passive sensor into an **Active Analyst**. By shifting compute-heavy perception to the edge, OSP delivers a compression ratio of ~85,000:1 (downlinking a 1.2KB JSON brief instead of a 100MB+ raw file). This provides >99.99% bandwidth reduction per scene at near-zero RF cost.
+> Target Platform: MOI-1A (100TOPS GPU / 4GB VRAM / OrbitLab Environment)
+
+## 1. Executive Summary
+OSP transforms MOI-1A from a passive sensor into an **Active Analyst**. By shifting compute-heavy perception to the edge, OSP delivers a compression ratio of ~85,000:1 (downlinking a 1.2KB JSON brief instead of a 100MB+ raw file). This provides >99.99% bandwidth reduction per scene at near-zero RF cost. Utilizes protobuff and token-mapping.
 
 ---
 
@@ -130,7 +132,7 @@ The project incorporates Retrieval-Augmented Generation (RAG) to reduce hallucin
 
 OSP also introduces episodic memory and agentic mission orchestration. Detection events are persisted across orbital passes, enabling the system to identify recurring anomalies and reason temporally rather than treating every scene independently. A lightweight orbital mission controller autonomously performs retrieval, reasoning, uncertainty evaluation, and OVV scheduling through a structured detect → retrieve → reason → decide → log pipeline. This transforms the system from a passive detector into an active orbital intelligence agent capable of initiating follow-up actions.
 
-The overall architecture combines edge AI, multimodal perception, semantic compression, grounded LLM reasoning, and explainable decision-making into a unified Earth observation system. By coupling onboard multispectral inference with structured GenAI workflows, OSP demonstrates how modern satellite systems can evolve from raw imaging platforms into autonomous semantic intelligence infrastructure.
+The overall architecture combines edge AI, multimodal perception, semantic compression, grounded LLM reasoning, and explainable decision-making into a unified Earth observation system. By coupling onboard multispectral inference with structured GenAI workflows, OSP demonstrates how modern satellite systems can evolve from raw imaging platforms into autonomous semantic intelligence infrastructure. 
 
 We also implemented the "LLM-as-a-Judge" / Evaluation Loop framework to evaluate Grounding Accuracy (Faithfulness).
 
