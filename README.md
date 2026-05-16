@@ -1,6 +1,6 @@
 # Orbital Scene Preprocessor
 
-> https://osp-command-centre.streamlit.app/
+https://osp-command-centre.streamlit.app/
 
 ![img.jpg](img.jpg)
 
@@ -69,13 +69,6 @@ Turn OrbitLab into a Semantic API for Earth Intelligence.
 | Reproducibility   | Deterministic Execution | Critical for mission-assurance and ground-side debugging. |
 
 ---
-
-> understand the full stack:
-> * Satellite constraints (VRAM, latency, power)
-> * Spectral science (why 6 bands matter, not just 3)
-> * Data economics (cost per inference, bandwidth saved)
-> * LLM integration (structured reasoning, not just "summary")
-> * System design (OVV protocol, closed-loop commanding)
 
 # Deployment & Local Simulation
 OSP is designed for the MOI-1A OrbitLab environment but can be fully simulated locally using the provided Dockerized sandbox.
