@@ -127,7 +127,7 @@ OSP also introduces episodic memory and agentic mission orchestration. Detection
 
 The overall architecture combines edge AI, multimodal perception, semantic compression, grounded LLM reasoning, and explainable decision-making into a unified Earth observation system. By coupling onboard multispectral inference with structured GenAI workflows, OSP demonstrates how modern satellite systems can evolve from raw imaging platforms into autonomous semantic intelligence infrastructure. 
 
-We also implemented the "LLM-as-a-Judge" / Evaluation Loop framework to evaluate Grounding Accuracy (Faithfulness).
+Also implemented the "LLM-as-a-Judge" / Evaluation Loop framework to evaluate Grounding Accuracy (Faithfulness).
 
 - Ground Truth Verification: It calculates the precise number of anomalies reported by the initial telemetry payload (the JSON data).
 - LLM Report Extraction: It parses the LLM's returned JSON dictionary (specifically focusing on the anomaly_assessments array output by llm_analyst.py) to see what ORION actually reported.
