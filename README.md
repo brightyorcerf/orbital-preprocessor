@@ -69,10 +69,10 @@ That last row is why this table exists. An earlier version of this README led wi
 ### Reproducing the model artifacts
 
 ```bash
-python data/synth_demo.py --n_train 32 --out data/input_debug   # synthetic 6-band tiles
-python model/stem_swap.py                                        # 6-ch stem + 4-class head
-python satellite_export.py --calib data/input_debug/images/train # FP32 export + INT8 PTQ
+python train.py --export     # dataset → stem surgery → 2-phase train → FP32/INT8 export → scored
 ```
+
+Runs in ~100 minutes on a CPU (26 epochs; see the MPS caveat below). `python train.py --quick` smoke-tests every stage in under 3 minutes on a tiny corpus. Individual stages remain runnable on their own — `data/synth_demo.py`, `model/train_6ch.py`, `satellite_export.py`, `model/evaluate_detector.py`.
 
 ### Measured quantization results
 
@@ -81,17 +81,38 @@ python satellite_export.py --calib data/input_debug/images/train # FP32 export +
 | Metric | FP32 | INT8 | |
 | :--- | ---: | ---: | :--- |
 | Artifact size | 12.67 MB | **3.69 MB** | 3.43× smaller |
-| Latency (CPU, 640², seq.) | 118.1 ms | **66.8 ms** | 1.77× faster |
-| Mean relative divergence | — | **2.18 %** | max 2.49 % |
+| Latency (CPU, 640², seq.) | 110.3 ms | **62.0 ms** | 1.78× faster |
+| Mean relative divergence | — | **3.52 %** | max 4.24 % |
 | Bitwise determinism | — | **PASS** | identical output across runs |
-| `skyroot-oam` 400 ms budget | ✗ | **✓ MET** | at 6× margin |
+| `skyroot-oam` 400 ms budget | ✗ | **✓ MET** | at 6.5× margin |
 
-Two honest caveats:
+**3.69 MB does not meet the "<3 MB" target this README used to claim.** The old figure was never measured; the real number is 3.69 MB, stated as unmet rather than quietly restated.
 
-1. **3.69 MB does not meet the "<3 MB" target this README used to claim.** The old figure was never measured. The real number is 3.69 MB, and the target is now stated as unmet rather than quietly restated.
-2. **Divergence is measured against an untrained re-headed model.** It characterises the quantization step, not detection accuracy. Accuracy retention requires a trained checkpoint — see §7.
+Output shape `(1, 8, 8400)` — 4 box + 4 class channels — confirms the head is genuinely 4-class in the exported graph.
 
-Output shape `(1, 8, 8400)` — 4 box + 4 class channels — confirms the head is genuinely 4-class in the exported graph, which is what the previous version got wrong.
+### Measured detection accuracy
+
+Relative tensor divergence above says nothing about whether boxes survive quantization — a graph can diverge by a few percent and still lose every detection. `python model/evaluate_detector.py --onnx <model> --images osp_dataset/images/val --labels osp_dataset/labels/val` scores the deployed decision path (`inference.engine.postprocess`, same NMS, same class map) on the held-out synthetic split (80 tiles, none seen in training):
+
+| | FP32 checkpoint | INT8 (deployed) | |
+| :--- | ---: | ---: | :--- |
+| mAP@0.5 | 0.992 | **0.993** | quantization cost ≈0 here |
+| mAP@0.5:0.95 | 0.905 | **0.853** | quantization costs ~5 pts at strict IoU |
+| ship | AP50 0.985 | AP50 0.990 | 200 instances |
+| airplane | AP50 1.000 | AP50 1.000 | 48 instances |
+| storage-tank | AP50 0.983 | AP50 0.982 | 116 instances |
+| harbor | AP50 1.000 | AP50 1.000 | 24 instances |
+
+Per-class numbers are reported because the composite could otherwise hide one dead class behind three strong ones — `test_pipeline.py` T13 asserts `classes_scored ≥ 3` for exactly that reason.
+
+**This is a synthetic-tile result and should be read as one.** The corpus is procedurally generated shapes (rectangles, cruciforms, discs) on flat-colour backgrounds with a COCO-pretrained backbone — a much easier task than real Sentinel-2 imagery with genuine texture, occlusion, and sensor noise. It demonstrates the *training pipeline* produces a working detector, not real-world accuracy. See §7.
+
+Two structural defects made this untrainable before now, independent of any tuning:
+
+1. The synthetic corpus generated one class ("ship") while the rebuilt head emitted four. `engine.postprocess` refuses a class-count mismatch, so the two halves could never run together. `data/synth_demo.py` now generates all four classes across three composed scene archetypes (open ocean, port, airfield), including vessels berthed *inside* harbour boxes — the case per-class NMS exists for.
+2. `train.py` called Ultralytics' stock trainer, whose data loader reads 8-bit RGB and cannot read 6-band float32 `.npy` tiles at all. `model/train_6ch.py` is a from-scratch two-phase loop (`v8DetectionLoss` reused, data path is OSP's own) whose preprocessing is byte-identical to `inference/engine.py:preprocess` — so what's trained is what's served.
+
+**MPS is not used for training on this machine.** The identical run that reaches cls_loss 0.29 / mAP50 0.99 on CPU diverges to cls_loss ~6.0 / mAP50 0.02 on Apple's MPS backend with the same seed and data — a real numerical bug in this PyTorch/MPS combination, not a speed tradeoff. `model/train_6ch.py` defaults to CPU and documents the measurement; verify independently before trusting `--device mps` elsewhere.
 
 ---
 
@@ -160,8 +181,8 @@ Stated explicitly so the scope is not mistaken for a claim:
 * Full atmospheric correction (L2A input assumed).
 * Quantization-aware training for on-orbit model updates.
 * Encrypted RF cross-link regulatory compliance.
-* **Training data.** Detection is trained on synthetic 6-band tiles and domain-adapted RGB weights, because public labelled multispectral detection datasets are scarce. Detection accuracy numbers from this repo characterise the *pipeline*, not operational performance on real Sentinel-2 imagery.
-* **A trained detector.** The stem swap and 4-class head rebuild are verified in the exported graph, and the quantized model runs end-to-end at 66.8 ms — but the re-headed classification branches have not been trained, so `engine.py` currently emits **zero detections** on synthetic tiles. Everything downstream (serialisation, policy engine, RAG, memory, eval harness) is exercised against mock and recorded payloads. Training is the next piece of work, not a completed one.
+* **Training data.** Detection is trained on synthetic 6-band tiles and domain-adapted RGB weights, because public labelled multispectral detection datasets are scarce. Detection accuracy numbers from this repo characterise the *pipeline* — that stem surgery, training and quantization compose into something that finds real boxes — not operational performance on real Sentinel-2 imagery. The synthetic corpus is procedurally generated shapes on flat backgrounds; it is an easier task than real coastal imagery with texture, occlusion and sensor noise, and mAP on it should not be read as an estimate of real-world mAP.
+* **Real-imagery validation.** The detector is trained and scores 0.99 mAP@0.5 (§3) entirely on synthetic tiles. Retraining and re-benchmarking on real Sentinel-2 scenes with real annotations is the next piece of work, not a completed one — everything downstream of detection (serialisation, policy engine, RAG, memory, eval harness) is exercised against the live detector's output as well as mock and recorded payloads, but none of it has seen a real satellite image yet.
 
 ---
 
@@ -171,13 +192,12 @@ Stated explicitly so the scope is not mistaken for a claim:
 conda create -n osp_dev python=3.10 -y && conda activate osp_dev
 pip install -r requirements.txt
 
-python data/synth_demo.py --n_train 20 --out data/input_debug
-python model/stem_swap.py
-python satellite_export.py --calib data/input_debug/images/train
+python train.py --export     # dataset → stem surgery → train → INT8 export → scored (~100 min CPU)
+# or: python train.py --quick --export   # ~3 min smoke test, tiny corpus
 
 python inference/engine.py \
   --model model/artifacts/osp_yolov8n_int8.onnx \
-  --tiles data/input_debug/images/train \
+  --tiles osp_dataset/images/val \
   --out   data/telemetry_out \
   --platform skyroot-oam
 

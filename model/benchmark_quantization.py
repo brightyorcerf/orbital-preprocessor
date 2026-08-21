@@ -138,8 +138,12 @@ def main() -> None:
         verdict = "MET" if r["latency_budget_met"] else "MISSED"
         print(f"  {r['platform']} budget  : {r['latency_budget_ms']:.0f} ms → {verdict}")
     print("─" * 60)
-    print("  NOTE: divergence is measured against an UNTRAINED re-headed model.")
-    print("  It characterises the quantization step, not detection accuracy.")
+    print("  NOTE: relative divergence characterises the quantization step in")
+    print("  tensor space. It is not a detection-accuracy figure and cannot be")
+    print("  read as one — a graph can diverge by 2% and still lose every box.")
+    print("  For what quantization cost in mAP, run:")
+    print("    python model/evaluate_detector.py --onnx <int8.onnx> \\")
+    print("        --images osp_dataset/images/val --labels osp_dataset/labels/val")
     print("─" * 60 + "\n")
 
     if args.out:

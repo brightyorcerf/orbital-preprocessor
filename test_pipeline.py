@@ -17,6 +17,8 @@ Test suite:
   T9  VRAM budget verification (<4 GB)
   T10 Semantic integrity — LLM prompt construction and JSON schema validation
   T11 Full pipeline end-to-end (T1 → T10 in sequence)
+  T12 Training corpus agrees with the engine's class map (data/synth_demo.py)
+  T13 Trained detector clears its accuracy floor (model/evaluate_detector.py)
 
 Run:
   python test_pipeline.py              # all tests, no API key needed
@@ -55,8 +57,18 @@ SKIP = f"{YELLOW}SKIP{RESET}"
 _results: list[tuple[str, str, str]] = []   # (name, status, detail)
 
 
+class SkipTest(Exception):
+    """Raised by a test whose precondition is absent (e.g. no trained artifact).
+
+    A skip is reported as a skip and does not fail the suite, but it is also
+    never reported as a pass — the distinction matters for T13, where the
+    difference between "the detector meets its accuracy floor" and "no model
+    was present to check" is the entire question.
+    """
+
+
 def run_test(name: str):
-    """Decorator — catches exceptions, records PASS/FAIL."""
+    """Decorator — catches exceptions, records PASS/FAIL/SKIP."""
     def decorator(fn):
         def wrapper():
             print(f"  {CYAN}{name}{RESET} ... ", end="", flush=True)
@@ -66,6 +78,10 @@ def run_test(name: str):
                 ms = (time.perf_counter() - t0) * 1000
                 print(f"{PASS}  {detail}  [{ms:.1f}ms]")
                 _results.append((name, "PASS", detail))
+            except SkipTest as e:
+                ms = (time.perf_counter() - t0) * 1000
+                print(f"{SKIP}  {e}  [{ms:.1f}ms]")
+                _results.append((name, "SKIP", str(e)))
             except AssertionError as e:
                 ms = (time.perf_counter() - t0) * 1000
                 print(f"{FAIL}  {e}  [{ms:.1f}ms]")
@@ -754,6 +770,120 @@ def test_full_pipeline():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  T12  TRAINING CORPUS ↔ ENGINE CLASS MAP
+# ══════════════════════════════════════════════════════════════════════════════
+
+@run_test("T12  Training corpus / class-map agreement")
+def test_training_corpus():
+    """The generator, the head and the engine must agree on the class list.
+
+    This is the defect that made the repo untrainable end to end: the corpus
+    emitted one class ("ship"), the head was rebuilt for four, and
+    `engine.postprocess` raises if the head's class count disagrees with its
+    class map. Each half was internally consistent, so nothing caught it until
+    something tried to run all three together — which is what this test is.
+    """
+    from data.synth_demo import CLASS_NAMES as DATA_CLASSES, generate_tile
+    from inference.engine import CLASS_NAMES as ENGINE_CLASSES
+
+    assert len(DATA_CLASSES) == len(ENGINE_CLASSES), (
+        f"corpus has {len(DATA_CLASSES)} classes, engine map has "
+        f"{len(ENGINE_CLASSES)}"
+    )
+    for idx, name in enumerate(DATA_CLASSES):
+        assert ENGINE_CLASSES[idx] == name, (
+            f"class {idx}: corpus says '{name}', engine says "
+            f"'{ENGINE_CLASSES[idx]}' — a trained model's ids would be relabelled"
+        )
+
+    # Labels must be well-formed, in-range, and cover every declared class over
+    # a reasonable sample. A silently mono-class corpus is the failure mode.
+    seen = set()
+    n_boxes = 0
+    for seed in range(60):
+        tile, labels = generate_tile(seed=seed, tile_size=640)
+        assert tile.shape == (640, 640, 6), f"tile {seed} shape {tile.shape}"
+        assert tile.dtype == np.float32, f"tile {seed} dtype {tile.dtype}"
+        assert 0.0 <= float(tile.min()) and float(tile.max()) <= 1.0, (
+            f"tile {seed} outside [0,1] — training would not match "
+            f"engine.preprocess, which assumes reflectance in [0,1]"
+        )
+        for (cls, cx, cy, bw, bh) in labels:
+            assert 0 <= cls < len(DATA_CLASSES), f"class id {cls} out of range"
+            assert 0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0, f"centre off-tile: {cx},{cy}"
+            assert 0.0 < bw <= 1.0 and 0.0 < bh <= 1.0, f"bad box size: {bw}x{bh}"
+            seen.add(int(cls))
+            n_boxes += 1
+
+    missing = set(range(len(DATA_CLASSES))) - seen
+    assert not missing, (
+        f"classes never generated in 60 tiles: "
+        f"{[DATA_CLASSES[i] for i in sorted(missing)]} — their head channels "
+        f"would train on no positives"
+    )
+
+    return f"{len(DATA_CLASSES)} classes agree, {n_boxes} boxes over 60 tiles"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  T13  TRAINED DETECTOR ACCURACY
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Floor, not a target. It is set well below the measured result so that this
+# test fails on a regression — a broken preprocessing change, a head rebuilt
+# wrong, a quantization step that destroys the boxes — rather than on ordinary
+# run-to-run variance.
+MAP50_FLOOR = 0.50
+
+
+@run_test("T13  Trained detector accuracy floor")
+def test_trained_detector():
+    """Score whichever artifact exists on the validation split.
+
+    Skips rather than fails when there is no trained artifact and no validation
+    corpus, because a fresh clone has neither. It does *not* skip quietly once
+    they exist: an artifact that loads, exports and benchmarks perfectly while
+    detecting nothing is the exact state this repo shipped in, and every other
+    test in this suite passes in that state.
+    """
+    int8 = ROOT / "model" / "artifacts" / "osp_yolov8n_int8.onnx"
+    best = ROOT / "model" / "artifacts" / "osp_best.pt"
+    val_images = ROOT / "osp_dataset" / "images" / "val"
+    val_labels = ROOT / "osp_dataset" / "labels" / "val"
+
+    if not val_images.exists():
+        raise SkipTest("no validation split — run: python data/synth_demo.py")
+    if not (int8.exists() or best.exists()):
+        raise SkipTest("no trained artifact — run: python train.py --export")
+
+    from model.evaluate_detector import OnnxBackend, TorchBackend, evaluate
+
+    if int8.exists():
+        backend, label = OnnxBackend(str(int8)), "INT8"
+    else:
+        backend, label = TorchBackend(str(best)), "FP32"
+
+    # 24 tiles keeps the test inside a few seconds on CPU while still covering
+    # every class; the full split is scored by model/evaluate_detector.py.
+    r = evaluate(backend, val_images, val_labels, limit=24)
+
+    assert r["detections_above_conf"] > 0, (
+        "detector emitted zero detections above the deployment confidence "
+        "threshold — the artifact runs but does not detect"
+    )
+    assert r["map50"] >= MAP50_FLOOR, (
+        f"mAP@0.5 {r['map50']:.3f} below floor {MAP50_FLOOR}"
+    )
+    assert r["classes_scored"] >= 3, (
+        f"only {r['classes_scored']} classes present in the sample — "
+        f"the metric is not covering the head"
+    )
+
+    return (f"{label}: mAP50 {r['map50']:.3f}, mAP50-95 {r['map50_95']:.3f}, "
+            f"{r['detections_above_conf']} dets on {r['tiles']} tiles")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -774,18 +904,23 @@ if __name__ == "__main__":
         test_vram_budget,
         test_semantic_integrity,
         test_full_pipeline,
+        test_training_corpus,
+        test_trained_detector,
     ]
 
     for t in tests:
         t()
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    passed = sum(1 for _, s, _ in _results if s == "PASS")
-    failed = sum(1 for _, s, _ in _results if s in ("FAIL", "ERROR"))
-    total  = len(_results)
+    passed  = sum(1 for _, s, _ in _results if s == "PASS")
+    failed  = sum(1 for _, s, _ in _results if s in ("FAIL", "ERROR"))
+    skipped = sum(1 for _, s, _ in _results if s == "SKIP")
+    total   = len(_results)
 
     print(f"\n{BOLD}{'━'*60}{RESET}")
     print(f"{BOLD}  Results: {GREEN}{passed}/{total} PASS{RESET}", end="")
+    if skipped:
+        print(f"  {YELLOW}{skipped} SKIP{RESET}", end="")
     if failed:
         print(f"  {RED}{failed} FAIL{RESET}", end="")
     print(f"\n{BOLD}{'━'*60}{RESET}\n")
