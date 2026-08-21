@@ -1,209 +1,256 @@
-# Orbital Scene Preprocessor (OSP)
+# Orbital Scene Preprocessor
 
-**On-board multispectral perception with a deterministic safety envelope around a generative reasoning layer.**
+On-board multispectral perception with a deterministic safety envelope around a generative reasoning layer.
 
-[Live command centre →](https://osp-command-centre.streamlit.app/)
+[Open the live command centre](https://osp-command-centre.streamlit.app/)
 
-![img.jpg](img.jpg)
+`0.99 mAP@0.5` · `3.69 MB INT8 model` · `62 ms per tile` · `226-byte briefs` · `43,497:1`
+
+![OSP command centre](img.jpg)
 
 ---
 
-## 1. The problem, stated precisely
+## Why this exists
 
-An Earth-observation payload generates data orders of magnitude faster than it can downlink it. The usual framing is that on-board inference is a *bandwidth optimisation*. On a sufficiently constrained platform it stops being an optimisation and becomes the only thing that works at all:
+Start with one number.
 
-| Platform profile | Contact capacity | Can it downlink one 100 MB scene? | Semantic briefs per contact |
+A Sentinel-2 scene is about 100 MB. Give a spacecraft a 2 Mbps radio and an 8-minute ground pass and it can move 122.9 MB per contact, enough for exactly one scene, using the entire window.
+
+Now shrink the radio. 32 kbps, a 5-minute pass: 1.2 MB per contact.
+
+The scene doesn't fit. Not "fits slowly", it does not fit, and no amount of patience fixes it, because you'd need a hundred contacts to move a single image and the camera produces the next one long before that. The backlog grows faster than the link drains it, forever.
+
+At that point, on-board inference stops being an optimisation and becomes the only thing that works at all.
+
+| Platform profile | Contact capacity | One 100 MB scene? | Briefs per contact |
 | :--- | ---: | :--- | ---: |
-| `moi-1a` (2 Mbps × 8 min) | 122.9 MB | Yes — barely, using the entire pass | 102,400 |
-| `skyroot-oam` (32 kbps × 5 min) | 1.2 MB | **No.** Not one. | 1,000 |
+| `moi-1a`, 2 Mbps x 8 min | 122.9 MB | Barely, using the whole pass | 102,400 |
+| `skyroot-oam`, 32 kbps x 5 min | 1.2 MB | No. Not one. | 1,000 |
 
-OSP downlinks a compact structured brief instead of imagery. On the constrained profile that is the difference between one scene per *hundred* contacts and a thousand scenes per contact.
-
-### Measured compression (`python test_pipeline.py`, T8)
-
-| Comparison | Ratio | Coverage |
-| :--- | ---: | :--- |
-| Protobuf brief (226 B) vs raw tile (9.83 MB) | **43,497:1** | same area — the honest per-tile figure |
-| Protobuf vs JSON | 2.4× | same content |
-| Scene-level, normalised | **1,432:1** | charges the scene all 324 briefs needed to cover it |
-| ~~Scene-level, unnormalised~~ | ~~463,972:1~~ | **do not quote** — one tile's brief vs a whole scene |
-
-That last row is why this table exists. An earlier version of this README led with "85,000:1", which came from dividing a single tile's brief by a full 100 MB scene. A Sentinel-2 scene is 10980×10980 px — 324 tiles of 640×640 — so one brief covers 1/324th of the area being compared against, inflating the ratio by that factor. The normalised number is ~30× smaller and still an overwhelming argument.
-
-> Both link budgets are `DERIVED` engineering assumptions, not operator specifications. See §6 on provenance — the repo distinguishes measured, published, and assumed numbers, and so does this README.
+OSP's answer is to never downlink the image. Detection runs on-orbit; what comes down is a structured brief: a few hundred bytes saying *what* was found, *where*, and *how confident*. The same 1.2 MB contact that could not carry a single picture carries about a thousand of these.
 
 ---
 
-## 2. Architecture
+## Data flow
 
 ```
- ON-BOARD (constrained)                    │  GROUND (unconstrained)
- ─────────────────────                     │  ─────────────────────
- 6-band L2A tile                           │
-   → stem-swapped YOLOv8n (INT8 ONNX)      │
-   → per-class NMS                         │
-   → geo projection                        │
-   → OSP brief  (~1.2 KB JSON / protobuf) ─┼─→  RAG retrieval (FAISS)
-                                           │      → episodic memory (SQLite)
-                                           │      → ORION LLM reasoning
-                                           │           ↓
-                                           │      PolicyEngine (deterministic)
-                                           │           ↓  ← holds authority
-                                           │      reconciled verdict → OVV request
+ON-BOARD (constrained)                    │  GROUND (unconstrained)
+──────────────────────                    │  ─────────────────────
+6-band tile  (640×640×6, 9.83 MB)         │
+  → INT8 detector      62 ms              │
+  → per-class NMS                         │
+  → pixel → lat/lon                       │
+  → protobuf brief     226 B  ────────────┼──→  RAG retrieval (FAISS)
+                                          │       → episodic memory (SQLite)
+                                          │       → LLM writes the analysis
+                                          │              ↓
+                                          │       PolicyEngine  ← holds authority
+                                          │              ↓
+                                          │       reconciled verdict → tasking request
 ```
 
-**The load-bearing design decision:** the LLM never holds authority. `agent/mission_controller.py` computes a deterministic `PolicyEngine` verdict from the detection payload alone, then reconciles the LLM's assessment against it. If the reasoning layer is unavailable, disagrees, or returns something unparseable, the policy engine's verdict stands. This is what makes a generative component admissible on a platform with an assurance requirement — and `config/platforms.py` encodes `llm_in_control_loop = False` as a profile constraint rather than a convention.
+Left of the line runs on a compute budget. Right of the line does not.
 
 ---
 
-## 3. Perception layer
+## Three things worth your attention
 
-| Component | Implementation |
-| :--- | :--- |
-| **Spectral stem swap** | YOLOv8n's 3-channel stem replaced with 6-channel (B2/B3/B4/B8/B11/B12). RGB channels warm-start from pretrained weights; NIR/SWIR channels initialise to the RGB weight mean rather than noise, so gradient flow is healthy from epoch 0. |
-| **Head re-shaping** | `Detect.cv3` classification branches rebuilt for 4 OSP classes, preserving the pretrained bias calibration on carried-over channels. |
-| **Quantization** | Static INT8 PTQ (QDQ format, per-channel weights, asymmetric uint8 activations), calibrated on real 6-band tiles using the *same* preprocessing path as inference. |
-| **Post-processing** | Per-class NMS via coordinate offsetting. Class-agnostic NMS deleted vessels berthed inside harbour boxes at IoU 0.73 — i.e. exactly the scenes of interest. |
-| **Spectral rationale** | B11/B12 SWIR reflectance separates man-made hull material from ocean water through light haze, where visible bands wash out. |
+### 1. The language model is not allowed to be in charge
 
-### Reproducing the model artifacts
+This is the part I'd most like a reviewer to look at.
+
+There is something genuinely uncomfortable about putting a generative model anywhere near a spacecraft: its failure mode is *confident, fluent, plausible nonsense*. It does not crash. It does not return an error code. It returns a well-formed paragraph that happens to be wrong, and every downstream system accepts it happily.
+
+So OSP structures around that instead of hoping it won't happen:
+
+- `agent/mission_controller.py` computes an alert level deterministically, from the detection payload alone. No model involved. Auditable, reproducible, testable.
+- The LLM produces its own independent assessment.
+- `_reconcile_alerts()` compares them. When they disagree, the policy engine wins. If the LLM is unavailable, times out, or returns something unparseable, the policy verdict simply stands and the pipeline continues.
+- `config/platforms.py` encodes `llm_in_control_loop = False` as a *profile constraint*, a property of the deployment target, not a convention someone can quietly refactor away.
+
+The LLM's job is to explain and contextualise. Never to decide. That distinction is what makes a generative component admissible on a platform that has an assurance requirement at all.
+
+### 2. Teaching an RGB network to see infrared
+
+YOLOv8n is pretrained on ordinary colour photographs: 3 input channels, 80 output classes. Satellite multispectral data is neither.
+
+The stem swap replaces that first convolution with a 6-channel one (B2/B3/B4/B8/B11/B12, blue through short-wave infrared). The three visible channels inherit their pretrained weights directly. The three new infrared channels are initialised to the mean of the RGB weights rather than to noise, so from the very first training step the network already has working edge and texture detectors on bands it has never seen: infrared reflectance is physically correlated with broadband visible energy, so the RGB mean is a genuinely informative prior, not a hack.
+
+The detection head is rebuilt from 80 COCO classes down to 4 (`ship`, `airplane`, `storage-tank`, `harbor`), carrying over the pretrained bias calibration so the network doesn't start out predicting everything at 50% confidence.
+
+Why bother with infrared at all: B11/B12 short-wave infrared separates man-made hull material from seawater even through light haze, in conditions where the visible bands wash out to uniform grey.
+
+### 3. Every number in this file regenerates from a script
+
+No figure here was typed in by hand. Each one has a command that reproduces it, and the repo distinguishes three kinds of claim:
+
+- `PUBLISHED`: the operator stated it publicly
+- `MEASURED`: we measured it on real hardware
+- `DERIVED`: an engineering assumption, to be replaced when real specs exist
+
+This matters because an earlier version of this README confidently advertised "85,000:1 compression" and a "<3 MB INT8 model". Both were wrong. The first divided one tile's brief by an entire scene, a 324x coverage mismatch. The second had never been measured. The honest numbers are 43,497:1 and 3.69 MB, and the size target is recorded as missed rather than quietly restated.
+
+---
+
+## Results
+
+### Detection accuracy
+
+80 held-out tiles, none seen during training. Scored through the deployed decision path: same NMS, same class map, same confidence threshold that flight code uses.
+
+| | FP32 checkpoint | INT8 (what ships) |
+| :--- | ---: | ---: |
+| mAP@0.5 | 0.992 | 0.993 |
+| mAP@0.5:0.95 | 0.905 | 0.853 |
+| ship *(200 instances)* | 0.985 | 0.990 |
+| airplane *(48)* | 1.000 | 1.000 |
+| storage-tank *(116)* | 0.983 | 0.982 |
+| harbor *(24)* | 1.000 | 1.000 |
+
+Per-class figures are shown because a composite score can hide one dead class behind three healthy ones. Quantization costs essentially nothing at IoU 0.5 and about 5 points at strict IoU, that is, boxes survive, they just get slightly looser.
+
+> Read this honestly: training data is *synthetic*, procedurally generated shapes on flat backgrounds, with clouds and decoy bright specks as hard negatives. It is a much easier problem than real Sentinel-2 imagery. These numbers demonstrate that the training pipeline produces a working detector. They are not an estimate of real-world accuracy.
 
 ```bash
-python train.py --export     # dataset → stem surgery → 2-phase train → FP32/INT8 export → scored
+python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
+    --images osp_dataset/images/val --labels osp_dataset/labels/val
 ```
 
-Runs in ~100 minutes on a CPU (26 epochs; see the MPS caveat below). `python train.py --quick` smoke-tests every stage in under 3 minutes on a tiny corpus. Individual stages remain runnable on their own — `data/synth_demo.py`, `model/train_6ch.py`, `satellite_export.py`, `model/evaluate_detector.py`.
-
-### Measured quantization results
-
-`python model/benchmark_quantization.py --platform skyroot-oam` regenerates every number below.
+### Quantization
 
 | Metric | FP32 | INT8 | |
 | :--- | ---: | ---: | :--- |
-| Artifact size | 12.67 MB | **3.69 MB** | 3.43× smaller |
-| Latency (CPU, 640², seq.) | 110.3 ms | **62.0 ms** | 1.78× faster |
-| Mean relative divergence | — | **3.52 %** | max 4.24 % |
-| Bitwise determinism | — | **PASS** | identical output across runs |
-| `skyroot-oam` 400 ms budget | ✗ | **✓ MET** | at 6.5× margin |
+| Artifact size | 12.67 MB | 3.69 MB | 3.43x smaller |
+| Latency (CPU, 640², sequential) | 110.3 ms | 62.0 ms | 1.78x faster |
+| Mean relative divergence | n/a | 3.52 % | max 4.24 % |
+| Bitwise determinism | n/a | PASS | identical output across runs |
+| `skyroot-oam` 400 ms budget | Missed | Met | 6.5x margin |
 
-**3.69 MB does not meet the "<3 MB" target this README used to claim.** The old figure was never measured; the real number is 3.69 MB, stated as unmet rather than quietly restated.
+Static INT8 post-training quantization (QDQ, per-channel weights), calibrated on real 6-band tiles through the *same* preprocessing path as inference. Static rather than dynamic on purpose: dynamic quantization leaves most convolutions in FP32 and makes latency data-dependent, which breaks the determinism property the assurance story rests on.
 
-Output shape `(1, 8, 8400)` — 4 box + 4 class channels — confirms the head is genuinely 4-class in the exported graph.
+Bitwise determinism is the quiet one worth noticing: the same input produces byte-identical output across runs, which is what makes an on-orbit result reproducible on the ground.
 
-### Measured detection accuracy
+```bash
+python model/benchmark_quantization.py --platform skyroot-oam
+```
 
-Relative tensor divergence above says nothing about whether boxes survive quantization — a graph can diverge by a few percent and still lose every detection. `python model/evaluate_detector.py --onnx <model> --images osp_dataset/images/val --labels osp_dataset/labels/val` scores the deployed decision path (`inference.engine.postprocess`, same NMS, same class map) on the held-out synthetic split (80 tiles, none seen in training):
+### Compression
 
-| | FP32 checkpoint | INT8 (deployed) | |
-| :--- | ---: | ---: | :--- |
-| mAP@0.5 | 0.992 | **0.993** | quantization cost ≈0 here |
-| mAP@0.5:0.95 | 0.905 | **0.853** | quantization costs ~5 pts at strict IoU |
-| ship | AP50 0.985 | AP50 0.990 | 200 instances |
-| airplane | AP50 1.000 | AP50 1.000 | 48 instances |
-| storage-tank | AP50 0.983 | AP50 0.982 | 116 instances |
-| harbor | AP50 1.000 | AP50 1.000 | 24 instances |
+| Comparison | Ratio | Coverage |
+| :--- | ---: | :--- |
+| Protobuf brief (226 B) vs raw tile (9.83 MB) | 43,497:1 | same area, the honest per-tile figure |
+| Protobuf vs JSON | 2.4x | same content |
+| Scene-level, normalised | 1,432:1 | charges the scene all 324 briefs needed to cover it |
 
-Per-class numbers are reported because the composite could otherwise hide one dead class behind three strong ones — `test_pipeline.py` T13 asserts `classes_scored ≥ 3` for exactly that reason.
-
-**This is a synthetic-tile result and should be read as one.** The corpus is procedurally generated shapes (rectangles, cruciforms, discs) on flat-colour backgrounds with a COCO-pretrained backbone — a much easier task than real Sentinel-2 imagery with genuine texture, occlusion, and sensor noise. It demonstrates the *training pipeline* produces a working detector, not real-world accuracy. See §7.
-
-Two structural defects made this untrainable before now, independent of any tuning:
-
-1. The synthetic corpus generated one class ("ship") while the rebuilt head emitted four. `engine.postprocess` refuses a class-count mismatch, so the two halves could never run together. `data/synth_demo.py` now generates all four classes across three composed scene archetypes (open ocean, port, airfield), including vessels berthed *inside* harbour boxes — the case per-class NMS exists for.
-2. `train.py` called Ultralytics' stock trainer, whose data loader reads 8-bit RGB and cannot read 6-band float32 `.npy` tiles at all. `model/train_6ch.py` is a from-scratch two-phase loop (`v8DetectionLoss` reused, data path is OSP's own) whose preprocessing is byte-identical to `inference/engine.py:preprocess` — so what's trained is what's served.
-
-**MPS is not used for training on this machine.** The identical run that reaches cls_loss 0.29 / mAP50 0.99 on CPU diverges to cls_loss ~6.0 / mAP50 0.02 on Apple's MPS backend with the same seed and data — a real numerical bug in this PyTorch/MPS combination, not a speed tradeoff. `model/train_6ch.py` defaults to CPU and documents the measurement; verify independently before trusting `--device mps` elsewhere.
+Protobuf over JSON buys 2.4x on identical content, largely by sending a single enum byte where JSON spells out `"type": "storage-tank"` in full.
 
 ---
 
-## 4. Reasoning layer (ORION)
+## Evaluation
 
-Structured generative analysis over the downlinked brief, grounded three ways:
+Two suites, because two very different things can be wrong.
 
-- **RAG** — 14 curated maritime knowledge chunks (UNCLOS/EEZ, IMO AIS carriage, dark-vessel behaviour, SWIR physics, OVV trigger policy) embedded into FAISS. The index is content-fingerprinted and rebuilds automatically if the corpus drifts, because a stale vector index fails *silently and plausibly* — the worst failure mode a grounded system can have.
-- **Episodic memory** — detections persist across orbital passes in SQLite, so recurring anomalies escalate rather than being re-derived from scratch each pass.
-- **Constrained decoding** — the response schema is enforced by the provider's structured-output mode. Earlier versions asked the model in-prompt to avoid double quotes and then regex-scraped failures; that salvage path fabricated `conf: 0.5` values which flowed straight into the faithfulness metric.
+`test_pipeline.py`: 13 tests over the engineering path: tensor contracts, geo-projection, protobuf round-trip, compression targets, memory budget, and an accuracy floor on the trained detector. That last one exists because an artifact that exports cleanly, quantizes cleanly and benchmarks cleanly *while detecting nothing* passes every other test in the file.
 
----
-
-## 5. Evaluation — the part that would embarrass me if it were fake
-
-`ground/eval_suite.py` scores every brief on **six independently-failing axes**:
+`ground/eval_suite.py`: 6 axes of LLM faithfulness, scored independently:
 
 | Axis | Catches |
 | :--- | :--- |
 | `schema_validity` | structurally unusable output |
-| `entity_grounding` | omissions, hallucinated detections, class substitutions (geodesic greedy matching — order-invariant) |
-| `coordinate_fidelity` | positions the model generated rather than transcribed |
+| `entity_grounding` | omissions, hallucinated detections, class substitutions |
+| `coordinate_fidelity` | positions the model invented rather than transcribed |
 | `numeric_fidelity` | confidence values that were never downlinked |
-| `citation_validity` | fabricated chunk IDs — **and** real IDs that were never retrieved (cited from parametric memory, which a naive checker passes) |
-| `policy_consistency` | disagreement with the deterministic policy engine, penalised asymmetrically: under-escalation costs 2× over-escalation, because downgrading a real threat is the safety-critical direction |
+| `citation_validity` | fabricated sources, and real sources that were never retrieved |
+| `policy_consistency` | disagreement with the policy engine, penalised 2x harder for *under*-escalation |
 
-The composite score is the **minimum** across axes, not the mean: a brief that invents coordinates is not redeemed by scoring well on schema validity.
+The composite is the minimum across axes, not the mean. A brief that invents coordinates is not redeemed by having valid JSON.
 
-This replaced a metric that compared `len(anomalies)` to `len(anomaly_assessments)` and returned 1.0 on equality. That metric scored a **perfect 1.0** on briefs that substituted classes, invented coordinates 400 km away, fabricated every confidence value, cited non-existent evidence, or downgraded a RED scene to GREEN. All six are now regression cases.
-
-```bash
-python -m ground.eval_suite --telemetry data/telemetry_out --live --fail-under 0.8
-```
-
-Two-tier distance gating: entity matching is generous (3 km — identify *which* detection is meant), coordinate fidelity is strict (500 m — coordinates are transcribed, not estimated).
+This replaced a metric that compared `len(anomalies)` to `len(assessments)` and returned a perfect 1.0 on equality, which it happily did for briefs that substituted classes, placed objects 400 km away, fabricated every confidence value, and downgraded a critical scene to nominal. All six are now regression cases.
 
 ---
 
-## 6. Platform profiles and number provenance
+## Tech stack
 
-`config/platforms.py` makes the deployment target data rather than scattered constants. Every field carries a provenance tag:
+| Layer | Built with |
+| :--- | :--- |
+| Detector | PyTorch, Ultralytics YOLOv8n (6-ch stem, 4-class head), custom training loop |
+| Runtime | ONNX Runtime, static INT8 PTQ, CPU execution provider |
+| Wire format | Protocol Buffers (`osp.proto`) |
+| Retrieval | FAISS + sentence-transformers *or* Gemini `text-embedding-004` |
+| Reasoning | Google Gemini 2.5 Flash, structured-output mode |
+| Memory | SQLite |
+| Frontend | Streamlit, Folium (2D), Plotly (3D globe) |
+| Deploy | Docker, Python 3.10 |
 
-- `PUBLISHED` — stated publicly by the operator
-- `MEASURED` — measured by us on representative hardware
-- `DERIVED` — an engineering assumption, to be replaced when real specs are available
-
-```bash
-python config/platforms.py                                    # print both profiles
-OSP_PLATFORM=skyroot-oam python inference/engine.py --model ... # select at runtime
-```
-
-The engine enforces the active profile: execution providers come from the profile (not "use CUDA if you can find it", which would make ground-side timings unrepresentative of flight), and briefs exceeding the link budget or tiles exceeding the latency budget are flagged.
-
-**The `skyroot-oam` profile is a DERIVED envelope for a launch-vehicle upper-stage compute class. It is not a Skyroot specification and does not claim to be one.** It is deliberately sized an order of magnitude below `moi-1a` so that the INT8 and compression work has to actually matter.
-
-> **Note for future me:** this repo used to be hard-wired to one operator (TakeMe2Space / MOI-1A). Rather than keeping two diverging copies of the project, that original state was frozen as branch `tm2space-original` (tag `v1.0-tm2space`) and `main` was generalised into one codebase with a swappable platform profile. `moi-1a` and `skyroot-oam` are just two entries in `PROFILES` — add a new operator by adding a new `PlatformProfile`, not by branching. Every field is tagged `PUBLISHED` (operator said so) / `MEASURED` (we tested it) / `DERIVED` (our assumption) specifically so a profile for a company we don't work for can never be mistaken for insider knowledge of their hardware.
+On the language model: Gemini is called over an API. It is *not* trained, fine-tuned, or hosted here. The only model trained in this repository is the 3.1M-parameter detector.
 
 ---
 
-## 7. Non-goals
-
-Stated explicitly so the scope is not mistaken for a claim:
-
-* Real-time AIS fusion or terrestrial database integration.
-* Flight-hardware radiation-hardening certification.
-* Full atmospheric correction (L2A input assumed).
-* Quantization-aware training for on-orbit model updates.
-* Encrypted RF cross-link regulatory compliance.
-* **Training data.** Detection is trained on synthetic 6-band tiles and domain-adapted RGB weights, because public labelled multispectral detection datasets are scarce. Detection accuracy numbers from this repo characterise the *pipeline* — that stem surgery, training and quantization compose into something that finds real boxes — not operational performance on real Sentinel-2 imagery. The synthetic corpus is procedurally generated shapes on flat backgrounds; it is an easier task than real coastal imagery with texture, occlusion and sensor noise, and mAP on it should not be read as an estimate of real-world mAP.
-* **Real-imagery validation.** The detector is trained and scores 0.99 mAP@0.5 (§3) entirely on synthetic tiles. Retraining and re-benchmarking on real Sentinel-2 scenes with real annotations is the next piece of work, not a completed one — everything downstream of detection (serialisation, policy engine, RAG, memory, eval harness) is exercised against the live detector's output as well as mock and recorded payloads, but none of it has seen a real satellite image yet.
-
----
-
-## 8. Running it
+## Run it
 
 ```bash
 conda create -n osp_dev python=3.10 -y && conda activate osp_dev
 pip install -r requirements.txt
+```
 
-python train.py --export     # dataset → stem surgery → train → INT8 export → scored (~100 min CPU)
-# or: python train.py --quick --export   # ~3 min smoke test, tiny corpus
+Train the detector: synthetic dataset, stem surgery, two-phase training, ONNX export, INT8 quantization, scored on both backends.
 
+```bash
+python train.py --export          # ~100 min on CPU (26 epochs)
+python train.py --quick --export  # ~3 min smoke test of every stage
+```
+
+Run inference and produce downlink briefs:
+
+```bash
 python inference/engine.py \
   --model model/artifacts/osp_yolov8n_int8.onnx \
   --tiles osp_dataset/images/val \
   --out   data/telemetry_out \
   --platform skyroot-oam
+```
 
+Launch the command centre:
+
+```bash
 streamlit run ground/dashboard.py
 ```
 
-Requires `GEMINI_API_KEY` for the ORION reasoning layer. Everything upstream of it — perception, quantization, serialisation, the policy engine — runs without any API key.
+Verify everything:
 
-Deployment: Dockerised Python 3.10 + ONNX Runtime, `--gpus 1 --memory 4g --cpus 2`, `/input` and `/output` mounts.
+```bash
+python test_pipeline.py    # 13 tests, no API key required
+```
+
+`GEMINI_API_KEY` is needed only for the reasoning layer. Everything upstream, perception, quantization, serialization, the policy engine, runs without any key or network access.
+
+> Training defaults to CPU deliberately. On Apple's MPS backend, the identical run that reaches `cls_loss 0.29 / mAP50 0.99` on CPU diverges to `cls_loss 6.0 / mAP50 0.02` with the same seed and the same data. That's a numerical bug, not a speed trade-off.
+
+---
+
+## Architecture
+
+A high-level tour is above; the detailed design (module boundaries, the reconciliation state machine, the protobuf schema, and the platform-profile system) lives in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+```
+config/     platform profiles + provenance tags
+data/       Sentinel-2 preprocessing, synthetic corpus generation
+model/      stem swap, training loop, quantization + accuracy benchmarks
+inference/  ONNX engine, NMS, geo-projection, protobuf serialization, explainability
+rag/        knowledge base + FAISS retrieval
+agent/      PolicyEngine and MissionController, the safety envelope
+ground/     dashboard, 3D globe, episodic memory, LLM analyst, eval suite
+```
+
+---
+
+## What this is not
+
+Stated plainly so the scope isn't mistaken for a claim:
+
+- Not validated on real imagery. Training and evaluation are entirely synthetic. Retraining on real Sentinel-2 scenes with real annotations is the next piece of work, not a finished one.
+- Not a Skyroot specification. The `skyroot-oam` profile is a `DERIVED` envelope for a launch-vehicle upper-stage compute class, sized an order of magnitude below `moi-1a` so the INT8 and compression work has to genuinely matter. It is not insider knowledge of anyone's hardware and does not claim to be.
+- No real-time AIS fusion, no terrestrial vessel-database integration.
+- No radiation-hardening certification, no RF regulatory compliance.
+- No quantization-aware training: INT8 is post-training only.
+- Full atmospheric correction assumed (L2A input).
