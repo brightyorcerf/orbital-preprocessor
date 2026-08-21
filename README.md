@@ -397,9 +397,17 @@ Every choice below had a defensible alternative. What follows is what I picked, 
 
 **Why:** boxes are drawn at full resolution so they land on the exact detected pixels, then the composite is downscaled once. The imagery is context, not evidence — the brief JSON carries bbox coordinates at full precision. Detail no reader can use isn't worth 16 MB of repository weight.
 
-### What I chose *not* to build
+### What I chose *not* to build, and which dataset that decision actually depends on
 
-Full Sentinel-2 retraining on real imagery. It is the honest next step and it is named in *What this is not*. It is also weeks of work that would lower the headline accuracy numbers, and it would not change the thing this round was about: closing the loop between real orbital mechanics and a real resource decision.
+The detector is still trained entirely on shapes `data/synth_demo.py` draws — circles for storage tanks, plus-signs for airplanes, rectangles for ships. `0.99 mAP@0.5` means the network finds primitives the same repo drew. That's a real limitation, and it's worth being specific about the right fix, because the obvious next step is the wrong one.
+
+**Not xView3-SAR.** It's the standard vessel-detection benchmark, and it's the wrong sensor. xView3 is Sentinel-1 SAR — two polarization channels of radar backscatter. This detector is 6-band optical multispectral (B2/B3/B4/B8/B11/B12). Retraining on it means discarding the 6-channel stem swap and the SWIR-separates-hull-from-water argument to rebuild for a different physical sensor entirely. That's not a data migration, it's a different project.
+
+**Not real Sentinel-2, either — this is the trap.** It's the *matching* sensor, which makes it look like the obvious choice. At 10 m ground sample distance a 100 m cargo ship is ~10 px long; a 20 m fishing boat is ~2 px, effectively invisible. That's exactly why real vessel detection uses SAR or sub-metre optical. Training this small a model on real Sentinel-2 would plausibly land around 0.2–0.4 mAP — not "the honest number instead of a fake one," but "attempted a genuinely hard problem and did poorly."
+
+**The actual next step is DOTA.** Its 15 categories include exactly `plane`, `ship`, `storage-tank`, `harbor` — the synthetic generator was evidently modelled on it already. Real aerial imagery, objects large enough to be genuinely detectable, ~2 GB, auto-downloads through Ultralytics. `data/synthetic_bands.py`'s `rgb_to_6band()` already derives 6 bands from RGB, so running it over real DOTA tiles gives real pixels, real objects, real backgrounds, with the 6-channel architecture untouched. The honest label after that would be *real imagery, synthetically extended spectral bands* — the infrared story would still be unvalidated, and the provenance block would still say so.
+
+It's ~2–4 days of work, not the weeks a full sensor-modality change would take, and it's the next thing on the list — deliberately after closing the orbital-mechanics loop this round was about, not instead of it.
 
 ---
 
@@ -426,7 +434,7 @@ data/       preprocessing, synthetic corpus, committed TLE snapshot + brief corp
 
 Stated plainly so the scope isn't mistaken for a claim:
 
-- Not validated on real imagery. Training and evaluation are entirely synthetic. Retraining on real Sentinel-2 scenes with real annotations is the next piece of work, not a finished one.
+- Not validated on real imagery. Training and evaluation are entirely synthetic. Retraining on real DOTA imagery (not Sentinel-2 — see *Tradeoffs* for why the matching sensor is actually the wrong choice here) is the next piece of work, not a finished one.
 - Not a Skyroot specification. The `skyroot-oam` profile is a `DERIVED` envelope for a launch-vehicle upper-stage compute class, sized an order of magnitude below `moi-1a` so the INT8 and compression work has to genuinely matter. It is not insider knowledge of anyone's hardware and does not claim to be.
 - No real-time AIS fusion, no terrestrial vessel-database integration.
 - No radiation-hardening certification, no RF regulatory compliance.
