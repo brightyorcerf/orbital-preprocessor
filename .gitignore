@@ -77,6 +77,3 @@ yolov8n.pt
 # Local venv
 .venv/
 *.data
-
-# local planning docs — not for the public repo
-upgrade4*.md
