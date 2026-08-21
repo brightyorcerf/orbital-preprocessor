@@ -1,0 +1,144 @@
+{
+  "scene_id": "OSP_000334",
+  "timestamp_utc": "2026-08-21T05:46:13.274Z",
+  "tile_footprint": {
+    "lat_min": 10.003663,
+    "lat_max": 10.061219,
+    "lon_min": 72.454481,
+    "lon_max": 72.512931
+  },
+  "cloud_cover": 0.005,
+  "anomaly_count": 8,
+  "anomalies": [
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.011712,
+        72.500556
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        496,
+        542,
+        513,
+        559
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.025786,
+        72.493341
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        416,
+        384,
+        435,
+        404
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.025966,
+        72.485304
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        328,
+        382,
+        347,
+        402
+      ]
+    },
+    {
+      "type": "airplane",
+      "lat_lon": [
+        10.049843,
+        72.480966
+      ],
+      "conf": 0.8822,
+      "bbox_px": [
+        273,
+        109,
+        307,
+        144
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.057892,
+        72.468911
+      ],
+      "conf": 0.8822,
+      "bbox_px": [
+        149,
+        28,
+        167,
+        46
+      ]
+    },
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.004877,
+        72.498364
+      ],
+      "conf": 0.8102,
+      "bbox_px": [
+        459,
+        621,
+        502,
+        632
+      ]
+    },
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.005102,
+        72.505351
+      ],
+      "conf": 0.8102,
+      "bbox_px": [
+        536,
+        615,
+        578,
+        633
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.059196,
+        72.475989
+      ],
+      "conf": 0.5717,
+      "bbox_px": [
+        218,
+        6,
+        253,
+        39
+      ]
+    }
+  ],
+  "meta": {
+    "model_version": "osp-yolov8n-int8-v1",
+    "inference_ms": 58.9,
+    "compression_ratio": 9187
+  },
+  "provenance": {
+    "pixels": "synthetic (data/synth_demo.py), held-out validation split",
+    "detections": "measured \u2014 osp_yolov8n_int8.onnx INT8 ONNX inference",
+    "geolocation": "real \u2014 SGP4 propagation of SENTINEL-2C (NORAD 60989), epoch 2026-08-21T04:58Z",
+    "source_tile": "osp_synth_000334.npy",
+    "subpoint": {
+      "lat": 10.032441,
+      "lon": 72.483706,
+      "alt_km": 790.797
+    },
+    "gsd_m": 10.0,
+    "tile_km": 6.4
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "scene_id": "OSP_000331",
+  "timestamp_utc": "2026-08-21T05:46:10.430Z",
+  "tile_footprint": {
+    "lat_min": 10.172254,
+    "lat_max": 10.229811,
+    "lon_min": 72.492389,
+    "lon_max": 72.55087
+  },
+  "cloud_cover": 0.006,
+  "anomaly_count": 11,
+  "anomalies": [
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.185429,
+        72.525056
+      ],
+      "conf": 0.9314,
+      "bbox_px": [
+        331,
+        464,
+        384,
+        523
+      ]
+    },
+    {
+      "type": "airplane",
+      "lat_lon": [
+        10.193208,
+        72.509248
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        159,
+        381,
+        210,
+        433
+      ]
+    },
+    {
+      "type": "airplane",
+      "lat_lon": [
+        10.194512,
+        72.522041
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        298,
+        367,
+        351,
+        418
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.22428,
+        72.538488
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        494,
+        51,
+        515,
+        72
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.20454,
+        72.511669
+      ],
+      "conf": 0.8822,
+      "bbox_px": [
+        195,
+        264,
+        227,
+        298
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.227293,
+        72.546712
+      ],
+      "conf": 0.8822,
+      "bbox_px": [
+        584,
+        17,
+        605,
+        39
+      ]
+    },
+    {
+      "type": "airplane",
+      "lat_lon": [
+        10.195457,
+        72.526153
+      ],
+      "conf": 0.8822,
+      "bbox_px": [
+        350,
+        363,
+        389,
+        401
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.227338,
+        72.52268
+      ],
+      "conf": 0.8822,
+      "bbox_px": [
+        323,
+        20,
+        340,
+        35
+      ]
+    },
+    {
+      "type": "storage-tank",
+      "lat_lon": [
+        10.216366,
+        72.512675
+      ],
+      "conf": 0.8519,
+      "bbox_px": [
+        214,
+        142,
+        230,
+        157
+      ]
+    },
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.185114,
+        72.510573
+      ],
+      "conf": 0.761,
+      "bbox_px": [
+        184,
+        490,
+        214,
+        504
+      ]
+    },
+    {
+      "type": "airplane",
+      "lat_lon": [
+        10.192714,
+        72.510664
+      ],
+      "conf": 0.7042,
+      "bbox_px": [
+        183,
+        394,
+        217,
+        431
+      ]
+    }
+  ],
+  "meta": {
+    "model_version": "osp-yolov8n-int8-v1",
+    "inference_ms": 63.8,
+    "compression_ratio": 7297
+  },
+  "provenance": {
+    "pixels": "synthetic (data/synth_demo.py), held-out validation split",
+    "detections": "measured \u2014 osp_yolov8n_int8.onnx INT8 ONNX inference",
+    "geolocation": "real \u2014 SGP4 propagation of SENTINEL-2C (NORAD 60989), epoch 2026-08-21T04:58Z",
+    "source_tile": "osp_synth_000331.npy",
+    "subpoint": {
+      "lat": 10.201032,
+      "lon": 72.52163,
+      "alt_km": 790.791
+    },
+    "gsd_m": 10.0,
+    "tile_km": 6.4
+  }
+}

@@ -6,7 +6,7 @@ Interactive 3D orbital globe — the demo closer.
 Renders:
   - Earth surface (Natural Earth tile via Plotly scattergeo/globe projection)
   - Anomaly pins with confidence-scaled markers
-  - MOI-1A orbital track (simulated ISS-like 51.6° inclination pass)
+  - Real propagated ground track (SGP4 on a committed TLE)
   - Tile footprint rectangles projected onto the globe
 
 Standalone: python ground/globe.py [payload.json]
@@ -36,51 +36,88 @@ CONF_OPACITY = lambda c: 0.4 + 0.6 * c   # 0.4 → 1.0 as conf rises
 
 
 # ── Orbital track generator ───────────────────────────────────────────────────
+#
+# What was here before: a perfect circle at 51.6° inclination, rotated by a
+# fixed RAAN, with the resulting longitudes then *shifted by a constant* so the
+# track would pass over the demo scene. Three separate fictions stacked up —
+# the wrong inclination for the spacecraft being depicted, no Earth rotation
+# beneath the orbit, and a fudge factor applied to make the picture come out
+# right. It was a drawing of an orbit, not an orbit.
+#
+# It is replaced by the real propagated ground track: SGP4 on a committed
+# element set, through the same frame conversions the pass finder and the
+# downlink scheduler use. The track curves the way it does because the Earth
+# turns underneath it, and it crosses the scene because that is genuinely where
+# the spacecraft flew.
+#
+# There is deliberately no synthetic fallback. If the orbital layer is
+# unavailable the globe draws no track at all, because a plausible-looking
+# fake orbit next to real detections is worse than an empty globe.
 
-def generate_orbital_track(
-    n_points: int = 360,
-    inclination_deg: float = 51.6,   # MOI-1A orbit (ISS-like)
-    lon_ascending_node: float = 60.0, # Approximate for Indian Ocean pass
-) -> tuple[list[float], list[float]]:
+
+def real_ground_track(
+    satellite: str,
+    start_utc,
+    minutes: float = 100.0,
+    step_seconds: float = 20.0,
+) -> tuple[list[float], list[float], list]:
     """
-    Generate one orbital pass over the scene of interest.
-    Uses simplified spherical geometry (no perturbations).
+    Propagate a real ground track.
 
-    Returns (lats, lons) in degrees.
+    The default span is ~one orbital period, so the globe shows a full
+    revolution: the eastward drift between successive equator crossings is
+    Earth rotation, and seeing it is most of the point of drawing the track at
+    all.
+
+    Returns (lats, lons, times).
     """
-    inc = math.radians(inclination_deg)
-    t   = np.linspace(0, 2 * math.pi, n_points)
+    from orbital.propagate import propagator_for
 
-    # Satellite position in orbital plane (simplified circular orbit)
-    x = np.cos(t)
-    y = np.sin(t)
-    z = np.zeros(n_points)
+    prop = propagator_for(satellite)
+    lats, lons, times = [], [], []
+    for sp in prop.track(start_utc, minutes, step_seconds):
+        lats.append(sp.latitude_deg)
+        lons.append(sp.longitude_deg)
+        times.append(sp.time_utc)
+    return lats, lons, times
 
-    # Rotate to inertial frame
-    # Rotation about Z by RAAN, then about X by inclination
-    raan = math.radians(lon_ascending_node)
-    cos_r, sin_r = math.cos(raan), math.sin(raan)
-    cos_i, sin_i = math.cos(inc),  math.sin(inc)
 
-    # Apply inclination rotation (tilt X → Z)
-    x_i = x
-    y_i = y * cos_i - z * sin_i
-    z_i = y * sin_i + z * cos_i
+def visibility_circle(station, altitude_km: float = 786.0, n: int = 180):
+    """
+    The ground locus where the spacecraft sits exactly on the station's
+    elevation mask — the footprint inside which a contact is possible.
 
-    # Apply RAAN rotation
-    x_f = x_i * cos_r - y_i * sin_r
-    y_f = x_i * sin_r + y_i * cos_r
-    z_f = z_i
+    Derived from the spherical geometry of the mask: for Earth radius Re,
+    orbit radius Re+h and mask elevation e, the central angle from the station
+    to the horizon-limit is
 
-    # Convert to lat/lon
-    lats = np.degrees(np.arcsin(np.clip(z_f, -1, 1)))
-    lons = np.degrees(np.arctan2(y_f, x_f))
+        lambda = arccos( Re/(Re+h) * cos(e) ) - e
 
-    # Shift so track passes over Indian Ocean scene (centre ~8°N 77°E)
-    lon_shift = 77.0 - float(lons[n_points // 2])
-    lons = (lons + lon_shift + 180) % 360 - 180
+    Drawn because it makes the pass geometry legible: the track either enters
+    this circle or it does not, and that is exactly what the contact window
+    computation decides.
+    """
+    import math as _m
 
-    return lats.tolist(), lons.tolist()
+    re_km = 6371.0
+    e = _m.radians(station.elevation_mask_deg)
+    lam = _m.acos(re_km / (re_km + altitude_km) * _m.cos(e)) - e
+
+    lat0 = _m.radians(station.latitude_deg)
+    lon0 = _m.radians(station.longitude_deg)
+
+    lats, lons = [], []
+    for i in range(n + 1):
+        brg = 2 * _m.pi * i / n
+        lat = _m.asin(_m.sin(lat0) * _m.cos(lam) +
+                      _m.cos(lat0) * _m.sin(lam) * _m.cos(brg))
+        lon = lon0 + _m.atan2(
+            _m.sin(brg) * _m.sin(lam) * _m.cos(lat0),
+            _m.cos(lam) - _m.sin(lat0) * _m.sin(lat),
+        )
+        lats.append(_m.degrees(lat))
+        lons.append((_m.degrees(lon) + 180) % 360 - 180)
+    return lats, lons
 
 
 def split_track_by_antimeridian(
@@ -132,39 +169,96 @@ def footprint_to_scatter(footprint: dict, scene_id: str) -> go.Scattergeo:
 
 # ── Main globe builder ────────────────────────────────────────────────────────
 
-def build_globe(payloads: list[dict], show_orbit: bool = True, center_lat: float = 8.5, center_lon: float = 77.5) -> go.Figure:
+def build_globe(
+    payloads: list[dict],
+    show_orbit: bool = True,
+    center_lat: float = 8.5,
+    center_lon: float = 77.5,
+    satellite: str | None = None,
+    station=None,
+) -> go.Figure:
     """
     Build the full 3D globe Plotly figure from a list of OSP payloads.
+
+    When `satellite` is given, the real propagated ground track is drawn,
+    anchored at the first brief's capture time so the spacecraft marker sits
+    where the spacecraft actually was when it took the first tile. When it is
+    not, no track is drawn — see the note above real_ground_track().
     """
+    import datetime as _dt
+
     fig = go.Figure()
 
-    # ── Orbital track ──────────────────────────────────────────────────────
-    if show_orbit:
-        track_lats, track_lons = generate_orbital_track()
-        for seg_lats, seg_lons in split_track_by_antimeridian(track_lats, track_lons):
+    # ── Ground station and its visibility footprint ────────────────────────
+    if station is not None:
+        try:
+            vis_lats, vis_lons = visibility_circle(station)
+            for seg_lats, seg_lons in split_track_by_antimeridian(vis_lats, vis_lons):
+                fig.add_trace(go.Scattergeo(
+                    lat=seg_lats, lon=seg_lons, mode="lines",
+                    line=dict(width=1.0, color="#38bdf8", dash="dash"),
+                    name=f"Contact footprint ({station.elevation_mask_deg:.0f}° mask)",
+                    showlegend=True, hoverinfo="skip",
+                ))
             fig.add_trace(go.Scattergeo(
-                lat=seg_lats,
-                lon=seg_lons,
-                mode="lines",
-                line=dict(width=1.2, color="#fcd34d", dash="dot"),
-                name="MOI-1A Orbital Track",
-                showlegend=True,
-                hoverinfo="skip",
+                lat=[station.latitude_deg], lon=[station.longitude_deg],
+                mode="markers+text",
+                marker=dict(size=11, color="#38bdf8", symbol="triangle-up"),
+                text=[station.name.split(" (")[0]],
+                textposition="bottom center",
+                name="Ground station", showlegend=False,
+                hovertemplate=(f"{station.name}<br>"
+                               "Lat: %{lat:.4f}°<br>Lon: %{lon:.4f}°<extra></extra>"),
             ))
+        except Exception:
+            # The globe is a presentation layer; a failure here must never take
+            # down the page that carries the actual mission numbers.
+            pass
 
-        # Satellite position marker (midpoint of track)
-        mid = len(track_lats) // 2
-        fig.add_trace(go.Scattergeo(
-            lat=[track_lats[mid]],
-            lon=[track_lons[mid]],
-            mode="markers+text",
-            marker=dict(size=14, color="#fcd34d", symbol="star"),
-            text=["🛰 MOI-1A"],
-            textposition="top center",
-            name="MOI-1A Position",
-            showlegend=False,
-            hovertemplate="MOI-1A<br>Lat: %{lat:.2f}°<br>Lon: %{lon:.2f}°<extra></extra>",
-        ))
+    # ── Real orbital track ─────────────────────────────────────────────────
+    if show_orbit and satellite:
+        try:
+            anchor = None
+            for p in payloads:
+                ts = p.get("timestamp_utc", "")
+                if ts:
+                    anchor = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    break
+            anchor = anchor or _dt.datetime.now(_dt.timezone.utc)
+
+            # Start a third of an orbit early so the spacecraft marker sits
+            # inside the drawn arc rather than at its leading edge.
+            track_lats, track_lons, track_times = real_ground_track(
+                satellite, anchor - _dt.timedelta(minutes=33), minutes=100.0
+            )
+
+            for seg_lats, seg_lons in split_track_by_antimeridian(track_lats, track_lons):
+                fig.add_trace(go.Scattergeo(
+                    lat=seg_lats, lon=seg_lons, mode="lines",
+                    line=dict(width=1.4, color="#fcd34d", dash="dot"),
+                    name=f"{satellite} ground track (SGP4)",
+                    showlegend=True, hoverinfo="skip",
+                ))
+
+            # Spacecraft marker at the true capture instant.
+            idx = min(
+                range(len(track_times)),
+                key=lambda i: abs((track_times[i] - anchor).total_seconds()),
+            )
+            fig.add_trace(go.Scattergeo(
+                lat=[track_lats[idx]], lon=[track_lons[idx]],
+                mode="markers+text",
+                marker=dict(size=14, color="#fcd34d", symbol="star"),
+                text=[f"🛰 {satellite}"],
+                textposition="top center",
+                name=f"{satellite} position", showlegend=False,
+                hovertemplate=(
+                    f"{satellite} at {anchor:%Y-%m-%d %H:%M:%S}Z<br>"
+                    "Lat: %{lat:.3f}°<br>Lon: %{lon:.3f}°<extra></extra>"
+                ),
+            ))
+        except Exception:
+            pass
 
     # ── Per-payload data ────────────────────────────────────────────────────
     seen_classes = set()

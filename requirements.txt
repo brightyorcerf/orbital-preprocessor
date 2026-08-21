@@ -29,7 +29,11 @@ protobuf>=5.29,<6.0
 streamlit>=1.32,<2.0
 folium>=0.16,<1.0
 streamlit-folium>=0.18,<1.0
-plotly>=5.20,<6.0
+# Imported directly by ground/dashboard.py to render the decision audit trail.
+# Streamlit pulls it in transitively, but a module that imports a package must
+# declare it rather than rely on someone else's dependency staying put.
+pandas>=2.0
+plotly>=5.20,<7.0          # validated on 6.9; 5.x also works
 
 # ── LLM reasoning layer (ORION analyst — Gemini / OpenAI / Anthropic) ────────
 google-generativeai>=0.5,<1.0
@@ -43,4 +47,16 @@ sentence-transformers>=2.7,<4.0  # Local embedding model (all-MiniLM-L6-v2)
 # rasterio>=1.3,<2.0           # uncomment to enable GeoTIFF loading
 
 # ── Development / testing ─────────────────────────────────────────────────────
-pytest>=8.0,<9.0
+pytest>=8.0,<10.0
+
+# ── Orbital mechanics (orbital/) ─────────────────────────────────────────────
+# The reference SGP4 implementation. A TLE is a set of mean elements fitted to
+# this specific analytical theory, so propagating one with anything else — a
+# generic integrator included — gives confidently wrong answers. Pure Python
+# with an optional C accelerator; no data files, no network at runtime.
+sgp4>=2.23,<3.0
+
+# skyfield is NOT a runtime dependency. It is used only by test_orbital.py as an
+# independent oracle for the frame conversions in orbital/frames.py, which is
+# where satellite geometry code actually goes wrong. Install it to run the full
+# test suite:  pip install skyfield

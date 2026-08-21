@@ -385,27 +385,259 @@ def build_folium_map(payloads: list[dict]) -> folium.Map:
     folium.LayerControl().add_to(m)
     return m
 
-# ── Demo payload generator ────────────────────────────────────────────────────
+# ── Committed brief corpus ────────────────────────────────────────────────────
+#
+# What used to live here was `make_demo_payload()`: a hand-written dict with
+# three invented anomalies at invented coordinates, stamped with the model
+# version of a detector that had never been run to produce them. It was the
+# default view, so it was what every visitor to the deployed app saw.
+#
+# It is replaced by a corpus of briefs on disk that were produced by actually
+# running the INT8 ONNX graph over held-out validation tiles, geolocated on a
+# real propagated Sentinel-2C ground track. Regenerate with:
+#
+#     python tools/generate_briefs.py
+#
+# Nothing below invents a number. If the corpus is missing, this module says so
+# and tells you how to build it, rather than falling back to something fake —
+# a fallback that silently substitutes fiction for measurement is exactly the
+# failure being corrected.
 
-def make_demo_payload() -> dict:
-    import random, datetime
-    rng = random.Random(42)
-    return {
-        "scene_id": "OSP-A3F2C1B4",
-        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0,
-                           "lon_min": 77.0, "lon_max": 78.0},
-        "cloud_cover": 0.08,
-        "anomaly_count": 3,
-        "anomalies": [
-            {"type": "ship",   "lat_lon": [8.412, 77.821], "conf": 0.87, "bbox_px": [320, 210, 380, 250]},
-            {"type": "ship",   "lat_lon": [8.388, 77.795], "conf": 0.79, "bbox_px": [280, 300, 340, 330]},
-            {"type": "harbor", "lat_lon": [8.501, 77.901], "conf": 0.92, "bbox_px": [450, 140, 560, 220]},
-        ],
-        "meta": {"model_version": "osp-yolov8n-int8-v1",
-                 "inference_ms": 312.4,
-                 "compression_ratio": 85000},
-    }
+BRIEFS_DIR = Path(__file__).resolve().parent.parent / "data" / "briefs"
+
+
+@st.cache_data(show_spinner=False)
+def load_committed_briefs(directory: str = str(BRIEFS_DIR)) -> tuple[list[dict], dict]:
+    """
+    Load the committed brief corpus and its manifest.
+
+    Returns (briefs, manifest). Briefs are ordered by capture time so the strip
+    reads along-track, which is the order the spacecraft actually acquired them.
+    """
+    d = Path(directory)
+    manifest_path = d / "manifest.json"
+    if not manifest_path.exists():
+        return [], {}
+
+    manifest = json.loads(manifest_path.read_text())
+    briefs = []
+    for entry in manifest.get("briefs", []):
+        fp = d / entry["file"]
+        if fp.exists():
+            b = json.loads(fp.read_text())
+            b["_thumbnail"] = str(d / entry["thumbnail"]) if entry.get("thumbnail") else None
+            briefs.append(b)
+
+    briefs.sort(key=lambda b: b.get("timestamp_utc", ""))
+    return briefs, manifest
+
+
+def briefs_missing_message() -> None:
+    """Explain how to build the corpus instead of silently showing fake data."""
+    st.error(
+        "**No brief corpus found.**\n\n"
+        "The dashboard serves real detector output from `data/briefs/`, which "
+        "is generated from the committed INT8 model. Build it with:\n\n"
+        "```\npython tools/generate_briefs.py\n```"
+    )
+
+
+
+# ── Mission plan: real orbital mechanics → deterministic downlink decision ────
+#
+# This panel is the point of the whole project, so it is worth being explicit
+# about what is computed and what is assumed.
+#
+# Computed: the contact window. A committed TLE is propagated with SGP4, look
+# angles are taken against the selected ground station's real coordinates, and
+# AOS/LOS are the elevation-mask crossings refined by bisection. Change the
+# station and the numbers change because the geometry changed.
+#
+# Computed: the plan. Which briefs fit is decided by orbital/downlink.py from
+# the window duration, the platform's link budget and each brief's measured
+# wire size. Every accept and every defer carries the rule that produced it.
+#
+# Assumed, and labelled as such in the UI: the constant link rate and its
+# elevation-based derating. That is an engineering placeholder for a real link
+# budget, not a measurement.
+#
+# Absent by construction: the language model. Nothing in this panel's data path
+# calls one. The analyst can narrate the finished plan further down the page;
+# it cannot alter it, and the plan object it receives is frozen.
+
+@st.cache_data(show_spinner=False)
+def compute_mission_plan(
+    payloads_json: str,
+    satellite: str,
+    station_key: str,
+    platform_key: str,
+) -> dict | None:
+    """
+    Propagate, find the next contact window, and schedule the brief queue.
+
+    Arguments are plain strings so Streamlit can cache on them; the payloads
+    arrive as a JSON blob for the same reason.
+    """
+    import datetime as _dt
+
+    from config.platforms import get_profile
+    from orbital.downlink import BriefCandidate, DownlinkScheduler
+    from orbital.passes import next_pass
+    from orbital.propagate import propagator_for
+    from orbital.stations import get_station
+    from orbital.tle import load_snapshot
+
+    payloads = json.loads(payloads_json)
+    snapshot = load_snapshot()
+    record = snapshot.get(satellite)
+    propagator = propagator_for(satellite, snapshot)
+    station = get_station(station_key)
+    profile = get_profile(platform_key)
+
+    # Plan from the moment the last brief was captured: the spacecraft cannot
+    # downlink an observation it has not made yet.
+    last_capture = max(
+        (p.get("timestamp_utc", "") for p in payloads), default=""
+    )
+    try:
+        after = _dt.datetime.fromisoformat(last_capture.replace("Z", "+00:00"))
+    except ValueError:
+        after = _dt.datetime.now(_dt.timezone.utc)
+
+    window = next_pass(propagator, station, after=after, search_hours=48.0)
+    if window is None:
+        return None
+
+    # Usable contacts per day, counted from the same propagation rather than
+    # assumed. Truncated windows are excluded: they are artefacts of the search
+    # span, not extra opportunities.
+    from orbital.passes import find_passes as _find
+    _day = [p_ for p_ in _find(propagator, station, after, hours=24.0)
+            if not p_.truncated_aos and not p_.truncated_los]
+    passes_per_day = float(len(_day))
+
+    scheduler = DownlinkScheduler.from_profile(profile)
+    candidates = [
+        BriefCandidate.from_payload({k: v for k, v in p.items()
+                                     if not k.startswith("_") and k != "provenance"})
+        for p in payloads
+    ]
+    plan = scheduler.plan(window, candidates)
+
+    d = plan.to_dict()
+    d["_latency_hours"] = (window.aos_utc - after).total_seconds() / 3600.0
+    d["_summary"] = plan.summary()
+    d["_capacity_briefs"] = plan.capacity_in_briefs()
+    d["_raw_tile_bytes"] = 640 * 640 * 6 * 4
+    d["_raw_passes"] = plan.raw_downlink_passes(len(candidates), d["_raw_tile_bytes"])
+    d["_n_tiles"] = len(candidates)
+    d["_passes_per_day"] = passes_per_day
+    d["_raw_scenes"] = plan.equivalent_raw_scenes()
+    d["_station_name"] = station.name
+    d["_tle_epoch"] = record.epoch.strftime("%Y-%m-%dT%H:%MZ")
+    d["_tle_staleness"] = record.staleness()
+    d["_tle_age_days"] = round(record.age_days(), 2)
+    d["_max_payload_bytes"] = profile.link.max_payload_bytes
+    d["_llm_in_control_loop"] = profile.assurance.llm_in_control_loop
+    return d
+
+
+def render_mission_plan(plan: dict) -> None:
+    """Render the contact window, the byte budget and the decision audit trail."""
+    w = plan["window"]
+    b = plan["budget"]
+
+    st.markdown("### DOWNLINK PLAN — NEXT CONTACT")
+
+    # The headline sentence: real pass geometry driving a real resource decision.
+    st.markdown(
+        f"<div class='mission-strip' style='display:block; line-height:1.7;'>"
+        f"<b>Next pass over {plan['_station_name']}:</b> "
+        f"{w['aos_utc'][11:16]} UTC, {w['duration_s'] / 60:.1f} minutes, "
+        f"{b['downlink_kbps']:.0f} kbps → {b['usable_bytes'] / 1e6:.2f} MB.<br>"
+        f"That is <b>{plan['_raw_scenes']:.2f} raw scenes</b> or "
+        f"<b>{plan['_capacity_briefs']:,} briefs</b>. "
+        f"{len(plan['scheduled'])} of {len(plan['decisions'])} queued briefs fit; "
+        f"{len(plan['deferred'])} wait for the next pass."
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("AOS (UTC)", w["aos_utc"][11:19])
+    c1.caption(f"LOS {w['los_utc'][11:19]}")
+    c2.metric("Peak elevation", f"{w['max_elevation_deg']:.1f}°")
+    c2.caption(f"{w['quality']} · mask {w['elevation_mask_deg']:.0f}°")
+    c3.metric("Usable downlink", f"{b['usable_bytes'] / 1e6:.2f} MB")
+    c3.caption(f"{b['efficiency_factor']:.0%} of theoretical (assumed derating)")
+    c4.metric("Store-and-forward", f"{plan['_latency_hours']:.1f} h")
+    c4.caption("capture → first contact")
+
+    st.progress(
+        min(1.0, b["utilisation"]),
+        text=f"Window utilisation {b['utilisation']:.1%} — "
+             f"{b['bytes_used']:,} B of {b['usable_bytes']:,} B",
+    )
+
+    # ── The counterfactual ────────────────────────────────────────────────────
+    # Everything above says what the brief pipeline costs. This says what the
+    # alternative costs, in the same units, over the same propagated window.
+    raw_mb = plan["_n_tiles"] * plan["_raw_tile_bytes"] / 1e6
+    passes = plan["_raw_passes"]
+    # Contacts per day for this pairing, from the same geometry that produced
+    # the window — not a rule of thumb.
+    days = passes / max(1e-9, plan.get("_passes_per_day", 2.0))
+    st.markdown(
+        f"<div class='mission-strip' style='display:block; line-height:1.7;'>"
+        f"<b>The same observations as raw imagery:</b> "
+        f"{plan['_n_tiles']} tiles x 9.83 MB = {raw_mb:,.0f} MB. "
+        f"At this window's {b['usable_bytes'] / 1e6:.2f} MB, that is "
+        f"<b>{passes:,.0f} contacts</b> (~{days:,.0f} days at "
+        f"{plan.get('_passes_per_day', 2.0):.1f} usable passes/day) versus "
+        f"<b>one</b> for the briefs — the same detections, "
+        f"{raw_mb * 1e6 / max(1, b['bytes_used']):,.0f}x fewer bytes."
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Audit trail ───────────────────────────────────────────────────────────
+    st.markdown("#### DECISION AUDIT TRAIL")
+    st.caption(
+        f"Every brief, the rule applied, and the running byte count. "
+        f"Policy fingerprint `{plan['policy_hash']}` — change a scheduling "
+        f"constant and this hash changes, so a plan can never be silently "
+        f"replayed against a different policy. "
+        f"LLM in control loop: **{plan['_llm_in_control_loop']}**."
+    )
+
+    import pandas as pd
+
+    rows = [{
+        "Scene": d["scene_id"],
+        "Action": "DOWNLINK" if d["action"] == "downlink" else "DEFER",
+        "Priority": round(d["priority"], 3),
+        "Bytes": d["wire_bytes"],
+        "Cumulative": d["cumulative_bytes"],
+        "Rule": d["rule"],
+        "Reasoning": d["detail"],
+    } for d in plan["decisions"]]
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        width="stretch",
+        hide_index=True,
+        height=min(560, 40 + 36 * len(rows)),
+    )
+
+    deferred_rules = {d["rule"] for d in plan["decisions"] if d["action"] == "defer"}
+    if "oversize-brief" in deferred_rules:
+        st.info(
+            f"One or more briefs exceed the {plan['_max_payload_bytes']} B "
+            f"per-payload cap for this platform and are held for fragmentation "
+            f"across contacts — a priority-independent rule, so a high-value "
+            f"brief cannot buy its way past a hard link constraint."
+        )
+
 
 # ── Main UI ───────────────────────────────────────────────────────────────────
 
@@ -419,9 +651,38 @@ def main():
 
         data_source = st.radio(
             "Telemetry Link",
-            ["Demo payload", "Upload JSON", "Load from /output/"],
+            ["Committed briefs (real INT8 output)", "Upload JSON", "Load from /output/"],
             index=0,
         )
+
+        st.divider()
+        st.markdown("### ORBIT & CONTACT")
+        try:
+            from orbital.stations import STATIONS
+            from orbital.tle import load_snapshot as _load_snap
+
+            _snap = _load_snap()
+            sat_choice = st.selectbox(
+                "Spacecraft (TLE)",
+                _snap.names,
+                index=_snap.names.index("SENTINEL-2C")
+                if "SENTINEL-2C" in _snap.names else 0,
+            )
+            station_choice = st.selectbox(
+                "Ground station",
+                list(STATIONS),
+                format_func=lambda k: STATIONS[k].name.split(" (")[0],
+            )
+            platform_choice = st.selectbox(
+                "Platform profile (link budget)",
+                ["skyroot-oam", "moi-1a"],
+                index=0,
+            )
+            orbital_ready = True
+        except Exception as _e:
+            st.warning(f"Orbital module unavailable: {_e}")
+            sat_choice = station_choice = platform_choice = None
+            orbital_ready = False
 
         st.divider()
         st.markdown("### ORION AGENT")
@@ -443,9 +704,13 @@ def main():
     # ── Load data ─────────────────────────────────────────────────────────────
     payloads = []
 
-    if data_source == "Demo payload":
-        payloads = [make_demo_payload()]
-        st.info("Loaded demo payload — Indian Ocean shipping lane.")
+    manifest: dict = {}
+
+    if data_source.startswith("Committed briefs"):
+        payloads, manifest = load_committed_briefs()
+        if not payloads:
+            briefs_missing_message()
+            return
 
     elif data_source == "Upload JSON":
         uploaded = st.file_uploader(
@@ -492,6 +757,50 @@ def main():
         """, unsafe_allow_html=True
     )
 
+    # ── Provenance ────────────────────────────────────────────────────────────
+    # Stated up front, because a dashboard that mixes measured, simulated and
+    # assumed values without saying which is which is not a demo — it is a
+    # claim the reader cannot check.
+    if manifest:
+        camp = manifest.get("campaign", {})
+        mdl = manifest.get("model", {})
+        st.caption(
+            f"**Detections:** measured — `{Path(mdl.get('artifact', '')).name}`, "
+            f"{mdl.get('size_mb', '?')} MB {mdl.get('precision', '')}, run over "
+            f"{manifest.get('source', {}).get('count', '?')} held-out validation tiles. "
+            f"**Geolocation:** real — SGP4 propagation of {camp.get('satellite', '?')} "
+            f"(NORAD {camp.get('norad_id', '?')}), TLE epoch {camp.get('tle_epoch_utc', '?')}, "
+            f"{camp.get('region', '')}. "
+            f"**Pixels:** synthetic — {manifest.get('source', {}).get('tiles', '')}."
+        )
+
+    st.divider()
+
+    # ── Mission plan ──────────────────────────────────────────────────────────
+    if orbital_ready:
+        try:
+            plan = compute_mission_plan(
+                json.dumps([{k: v for k, v in p.items() if not k.startswith("_")}
+                            for p in payloads]),
+                sat_choice, station_choice, platform_choice,
+            )
+            if plan is None:
+                st.warning(
+                    f"No complete contact window over "
+                    f"{station_choice} within 48 hours of the last capture."
+                )
+            else:
+                if plan["_tle_staleness"] not in ("fresh", "usable"):
+                    st.warning(
+                        f"TLE for {sat_choice} is {plan['_tle_age_days']:.0f} days old "
+                        f"({plan['_tle_staleness']}). SGP4 along-track error grows "
+                        f"~1-3 km/day, so these pass times are indicative only. "
+                        f"Refresh with `python tools/refresh_tle.py`."
+                    )
+                render_mission_plan(plan)
+        except Exception as e:
+            st.error(f"Mission planning failed: {e}")
+
     st.divider()
 
     # ── Main layout: map + analysis ───────────────────────────────────────────
@@ -511,8 +820,22 @@ def main():
             if st_data and st_data.get("last_object_clicked"):
                 center_lat = st_data["last_object_clicked"]["lat"]
                 center_lon = st_data["last_object_clicked"]["lng"]
-            fig = build_globe(payloads, show_orbit=True, center_lat=center_lat, center_lon=center_lon)
-            st.plotly_chart(fig, use_container_width=True)
+            _station_obj = None
+            if orbital_ready:
+                try:
+                    from orbital.stations import get_station as _gs
+                    _station_obj = _gs(station_choice)
+                except Exception:
+                    _station_obj = None
+            fig = build_globe(
+                payloads,
+                show_orbit=True,
+                center_lat=center_lat,
+                center_lon=center_lon,
+                satellite=sat_choice if orbital_ready else None,
+                station=_station_obj,
+            )
+            st.plotly_chart(fig, width="stretch")
 
     with data_col:
         st.markdown("### INTELLIGENCE FEED")
@@ -548,6 +871,23 @@ def main():
 </div>"""
             
             st.markdown(full_html, unsafe_allow_html=True)
+
+            # The tile the detector actually saw, with the boxes it actually
+            # drew. Shown collapsed so the feed stays scannable, but present:
+            # a detection list with no way to look at the evidence asks the
+            # reader to take the model's word for it.
+            thumb = payload.get("_thumbnail")
+            if thumb and Path(thumb).exists():
+                with st.expander(f"View tile — {scene_id}"):
+                    st.image(
+                        thumb,
+                        width="stretch",
+                        caption=(
+                            "Visible bands (B2/B3/B4), contrast-stretched for "
+                            "display. Boxes are the INT8 model's detections at "
+                            "their true pixel coordinates."
+                        ),
+                    )
 
     # ── OVV command ────────────────────────────────────────────────────────────
     if send_ovv:

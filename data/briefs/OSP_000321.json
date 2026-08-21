@@ -1,0 +1,74 @@
+{
+  "scene_id": "OSP_000321",
+  "timestamp_utc": "2026-08-21T05:46:00.948Z",
+  "tile_footprint": {
+    "lat_min": 10.734203,
+    "lat_max": 10.791759,
+    "lon_min": 72.618951,
+    "lon_max": 72.677538
+  },
+  "cloud_cover": 0.01,
+  "anomaly_count": 3,
+  "anomalies": [
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.750301,
+        72.642111
+      ],
+      "conf": 0.9314,
+      "bbox_px": [
+        222,
+        438,
+        284,
+        484
+      ]
+    },
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.743601,
+        72.656666
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        389,
+        518,
+        435,
+        553
+      ]
+    },
+    {
+      "type": "ship",
+      "lat_lon": [
+        10.74441,
+        72.641013
+      ],
+      "conf": 0.9087,
+      "bbox_px": [
+        217,
+        505,
+        265,
+        548
+      ]
+    }
+  ],
+  "meta": {
+    "model_version": "osp-yolov8n-int8-v1",
+    "inference_ms": 64.9,
+    "compression_ratio": 16948
+  },
+  "provenance": {
+    "pixels": "synthetic (data/synth_demo.py), held-out validation split",
+    "detections": "measured \u2014 osp_yolov8n_int8.onnx INT8 ONNX inference",
+    "geolocation": "real \u2014 SGP4 propagation of SENTINEL-2C (NORAD 60989), epoch 2026-08-21T04:58Z",
+    "source_tile": "osp_synth_000321.npy",
+    "subpoint": {
+      "lat": 10.762981,
+      "lon": 72.648244,
+      "alt_km": 790.774
+    },
+    "gsd_m": 10.0,
+    "tile_km": 6.4
+  }
+}
