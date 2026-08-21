@@ -68,4 +68,12 @@ globe.html
 !data/__init__.py
 !ground/__init__.py
 !model/__init__.py
-!inference/__init__.py
+!inference/__init__.py
+# Model artifacts (regenerate with satellite_export.py)
+model/artifacts/
+*.onnx
+yolov8n.pt
+
+# Local venv
+.venv/
+*.data

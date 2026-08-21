@@ -31,6 +31,62 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
 
+OSP_CLASS_NAMES = {0: "ship", 1: "airplane", 2: "storage-tank", 3: "harbor"}
+
+
+def reshape_detect_head(model: YOLO, nc: int) -> YOLO:
+    """
+    Rebuild YOLOv8's Detect head to emit `nc` classes instead of COCO's 80.
+
+    This used to be a no-op that only *logged* an intent to change nc, on the
+    assumption that ultralytics' trainer would re-initialise the head on the
+    first train() call. It does not: exporting straight from the swapped
+    checkpoint produced an ONNX graph with an 80-class head, so the runtime
+    argmax ranged over 80 logits and every detection resolved to "unknown"
+    against the 4-entry OSP class map.
+
+    Detect layout (ultralytics v8):
+      .cv2  → ModuleList of box-regression branches  (4 * reg_max outputs)
+      .cv3  → ModuleList of classification branches  (nc outputs)   ← rebuild
+      .no   → outputs per anchor = nc + 4 * reg_max
+    Only the final Conv2d of each cv3 branch is class-dimensioned, so we swap
+    exactly those and leave the box branches (and their pretrained weights)
+    untouched.
+    """
+    detect = model.model.model[-1]
+    old_nc = detect.nc
+
+    for branch in detect.cv3:
+        final_conv: nn.Conv2d = branch[-1]
+        new_conv = nn.Conv2d(
+            in_channels=final_conv.in_channels,
+            out_channels=nc,
+            kernel_size=final_conv.kernel_size,
+            stride=final_conv.stride,
+            padding=final_conv.padding,
+            bias=final_conv.bias is not None,
+        )
+        # YOLOv8 initialises classification bias so initial predicted objectness
+        # is low; carrying over a slice of the pretrained bias preserves that
+        # calibration rather than starting from a 0.5-probability head.
+        with torch.no_grad():
+            k = min(nc, old_nc)
+            new_conv.weight[:k] = final_conv.weight[:k]
+            if final_conv.bias is not None:
+                new_conv.bias[:k] = final_conv.bias[:k]
+                if nc > old_nc:
+                    new_conv.bias[k:] = final_conv.bias.mean()
+        branch[-1] = new_conv
+
+    detect.nc = nc
+    detect.no = nc + detect.reg_max * 4
+    model.model.nc = nc
+    model.model.names = {i: OSP_CLASS_NAMES.get(i, f"class_{i}") for i in range(nc)}
+
+    log.info(f"Detect head rebuilt: nc {old_nc} → {nc} (no={detect.no})")
+    return model
+
+
 def swap_stem_to_6ch(
     weights: str = "yolov8n.pt",
     nc: int = 4,
@@ -106,9 +162,7 @@ def swap_stem_to_6ch(
 
     # Update nc if different from base weights (COCO=80 → OSP=4)
     if model.model.nc != nc:
-        log.info(f"Updating nc: {model.model.nc} → {nc}")
-        # We keep the head as-is for transfer; nc mismatch is handled by
-        # the trainer's head re-initialisation on first train() call.
+        reshape_detect_head(model, nc)
 
     log.info(f"Stem after swap : {new_conv}")
     rgb_var  = new_conv.weight[:, :3, :, :].var().item()
@@ -118,7 +172,16 @@ def swap_stem_to_6ch(
         f"ch3-5 RGB-mean domain-adapt (var={swir_var:.4f})"
     )
 
-    # Persist as standard YOLO checkpoint dict
+    # Persist as standard YOLO checkpoint dict.
+    #
+    # `train_args` MUST be a mapping, not None. Ultralytics' loader does
+    #     args = {**DEFAULT_CFG_DICT, **(ckpt.get("train_args", {}))}
+    # and .get() returns the stored None rather than the {} default when the
+    # key is present, so saving None made the checkpoint permanently
+    # unloadable with "TypeError: 'NoneType' object is not a mapping".
+    # Nothing caught it because nothing ever loaded the file back.
+    import datetime
+
     ckpt = {
         "epoch": -1,
         "best_fitness": 0.0,
@@ -126,9 +189,9 @@ def swap_stem_to_6ch(
         "ema": None,
         "updates": 0,
         "optimizer": None,
-        "train_args": None,
-        "date": None,
-        "version": None,
+        "train_args": {"task": "detect", "nc": nc, "ch": 6},
+        "date": datetime.datetime.now().isoformat(),
+        "version": "osp-stem-swap-v2",
     }
     torch.save(ckpt, save_path)
     log.info(f"Saved 6-channel checkpoint → {save_path}")
@@ -166,20 +229,32 @@ def unfreeze_all(model: YOLO) -> YOLO:
     return model
 
 
-def verify_stem(model: YOLO) -> bool:
-    """Sanity check: confirm stem accepts 6-channel input."""
+def verify_stem(model: YOLO, expected_nc: int = 4) -> bool:
+    """
+    Sanity check both ends of the surgery: the stem accepts 6 channels AND the
+    head emits `expected_nc` classes. Checking only the stem is what let the
+    80-class head ship undetected.
+    """
     stem_conv = model.model.model[0].conv
-    ok = stem_conv.in_channels == 6
+    detect    = model.model.model[-1]
+
+    stem_ok = stem_conv.in_channels == 6
+    head_ok = detect.nc == expected_nc and detect.cv3[0][-1].out_channels == expected_nc
+
     log.info(
-        f"Stem verification: {'✓ PASS' if ok else '✗ FAIL'} "
+        f"Stem verification: {'✓ PASS' if stem_ok else '✗ FAIL'} "
         f"(in_channels={stem_conv.in_channels})"
     )
-    return ok
+    log.info(
+        f"Head verification: {'✓ PASS' if head_ok else '✗ FAIL'} "
+        f"(nc={detect.nc}, cls_out={detect.cv3[0][-1].out_channels}, expected={expected_nc})"
+    )
+    return stem_ok and head_ok
 
 
 if __name__ == "__main__":
     m = swap_stem_to_6ch(weights="yolov8n.pt", nc=4, save_path="yolov8n_6ch.pt")
-    assert verify_stem(m), "Stem swap verification failed!"
+    assert verify_stem(m, expected_nc=4), "Stem/head surgery verification failed!"
     m = freeze_backbone(m, freeze_until=9)
 
     # Forward pass sanity check

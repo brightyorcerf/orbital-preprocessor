@@ -42,46 +42,91 @@ _DEFAULT_INDEX_DIR = Path(__file__).parent / "vector_store"
 
 # ── Embedding backends ─────────────────────────────────────────────────────────
 
-def _embed_sentence_transformers(texts: list[str]) -> list[list[float]]:
+_ST_MODEL_NAME = "all-MiniLM-L6-v2"
+_st_model_cache = None
+
+
+def _get_st_model():
+    """
+    Lazily load and cache the sentence-transformers model.
+
+    This used to be constructed inside the embed function, so every single
+    retrieval re-loaded ~22MB of weights from disk — roughly 1-2s of pure
+    overhead per query, in a system whose entire thesis is latency discipline.
+    Loading once per process drops steady-state query embedding to ~10ms.
+    """
+    global _st_model_cache
+    if _st_model_cache is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers not installed. "
+                "Run: pip install sentence-transformers"
+            )
+        log.info(f"RAG: loading embedding model {_ST_MODEL_NAME} (once per process) ...")
+        _st_model_cache = SentenceTransformer(_ST_MODEL_NAME)
+    return _st_model_cache
+
+
+def _embed_sentence_transformers(texts: list[str], is_query: bool = False) -> list[list[float]]:
     """
     Local embedding using sentence-transformers.
-    Model: all-MiniLM-L6-v2 (~22MB, runs on CPU in <100ms for small batches)
+    Model: all-MiniLM-L6-v2 (~22MB, ~10ms per small batch on CPU once cached).
+
+    `is_query` is accepted for interface symmetry with the Gemini backend;
+    MiniLM is a symmetric model and needs no query/document distinction.
     """
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError:
-        raise ImportError(
-            "sentence-transformers not installed. "
-            "Run: pip install sentence-transformers"
-        )
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    model = _get_st_model()
     embeddings = model.encode(texts, normalize_embeddings=True)
     return embeddings.tolist()
 
 
-def _embed_gemini(texts: list[str], api_key: Optional[str] = None) -> list[list[float]]:
+def _embed_gemini(
+    texts: list[str],
+    api_key: Optional[str] = None,
+    is_query: bool = False,
+) -> list[list[float]]:
     """
-    Cloud embedding using Google Gemini text-embedding-004.
-    Higher dimensional (768-d) and domain-aware.
+    Cloud embedding using Google Gemini text-embedding-004 (768-d).
+
+    Two correctness details this backend previously got wrong:
+
+    1. task_type. text-embedding-004 is an *asymmetric* model: it projects
+       documents and queries into deliberately different regions of the space.
+       Embedding a query with `retrieval_document` (the old behaviour) means
+       querying with a vector the index was never built to be searched by,
+       which measurably degrades ranking. We now switch on `is_query`.
+
+    2. Normalisation. The index is a faiss.IndexFlatIP, so inner product only
+       equals cosine similarity when vectors are unit-length. Gemini does not
+       return normalised vectors, so raw dot products let vector *magnitude*
+       dominate ranking. We normalise explicitly.
     """
     try:
         import google.generativeai as genai
     except ImportError:
         raise ImportError("google-generativeai not installed.")
 
+    import numpy as np
+
     key = api_key or os.environ.get("GEMINI_API_KEY", "")
     if not key:
         raise ValueError("GEMINI_API_KEY required for Gemini embedding backend.")
     genai.configure(api_key=key)
+
+    task = "retrieval_query" if is_query else "retrieval_document"
 
     embeddings = []
     for text in texts:
         result = genai.embed_content(
             model="models/text-embedding-004",
             content=text,
-            task_type="retrieval_document",
+            task_type=task,
         )
-        embeddings.append(result["embedding"])
+        vec = np.asarray(result["embedding"], dtype=np.float32)
+        vec /= np.linalg.norm(vec) + 1e-12   # unit-length → IP == cosine
+        embeddings.append(vec.tolist())
     return embeddings
 
 
@@ -125,10 +170,32 @@ class OrbitalRAG:
     def _index_exists(self) -> bool:
         return (self.index_dir / "faiss.index").exists()
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
+    def _embed(self, texts: list[str], is_query: bool = False) -> list[list[float]]:
         if self.backend == "gemini":
-            return _embed_gemini(texts, self.api_key)
-        return _embed_sentence_transformers(texts)
+            return _embed_gemini(texts, self.api_key, is_query=is_query)
+        return _embed_sentence_transformers(texts, is_query=is_query)
+
+    @staticmethod
+    def _corpus_fingerprint(chunks: list) -> str:
+        """
+        Content hash over (id, title, content) of every chunk, in order.
+
+        The persisted FAISS index stores vectors positionally; retrieval maps
+        result index i back to `self._chunks[i]`. That mapping is only valid if
+        the corpus is byte-identical to the one that was embedded. Storing just
+        the chunk *ids* (the old behaviour) would not catch an edit to a
+        chunk's text, and nothing validated them anyway — so editing or
+        reordering knowledge_base.py silently returned confidently wrong
+        documents forever, with no error and no way to notice from the output.
+        """
+        import hashlib
+
+        h = hashlib.sha256()
+        for c in chunks:
+            h.update(c.id.encode())
+            h.update(c.title.encode())
+            h.update(c.content.encode())
+        return h.hexdigest()
 
     def _build_index(self) -> None:
         """Embed all knowledge chunks and store in a FAISS flat-L2 index."""
@@ -158,10 +225,11 @@ class OrbitalRAG:
         # Persist
         faiss.write_index(self._index, str(self.index_dir / "faiss.index"))
         meta = {
-            "dim":      self._dim,
-            "backend":  self.backend,
-            "n_chunks": len(chunks),
+            "dim":       self._dim,
+            "backend":   self.backend,
+            "n_chunks":  len(chunks),
             "chunk_ids": [c.id for c in chunks],
+            "corpus_fingerprint": self._corpus_fingerprint(chunks),
         }
         (self.index_dir / "meta.json").write_text(json.dumps(meta, indent=2))
         log.info(f"RAG: Index built and saved → {self.index_dir}")
@@ -177,12 +245,40 @@ class OrbitalRAG:
 
         self._index  = faiss.read_index(str(self.index_dir / "faiss.index"))
         meta         = json.loads((self.index_dir / "meta.json").read_text())
+        chunks       = get_all_chunks()
+
+        # ── Integrity gate ─────────────────────────────────────────────────────
+        # Any of these mismatching means the positional index→chunk mapping is
+        # invalid. Rebuild rather than serve wrong documents: a stale index
+        # fails silently and plausibly, which is the worst failure mode a
+        # grounded system can have.
+        reasons = []
+        if meta.get("backend") != self.backend:
+            reasons.append(
+                f"backend changed ({meta.get('backend')} → {self.backend})"
+            )
+        if meta.get("n_chunks") != len(chunks) or self._index.ntotal != len(chunks):
+            reasons.append(
+                f"chunk count changed (index={self._index.ntotal}, "
+                f"meta={meta.get('n_chunks')}, corpus={len(chunks)})"
+            )
+        if meta.get("corpus_fingerprint") != self._corpus_fingerprint(chunks):
+            reasons.append("knowledge base content changed since index was built")
+
+        if reasons:
+            log.warning(
+                "RAG: persisted index is stale (%s). Rebuilding.",
+                "; ".join(reasons),
+            )
+            self._build_index()
+            return
+
         self._dim    = meta["dim"]
-        self._chunks = get_all_chunks()
+        self._chunks = chunks
 
         log.info(
             f"RAG: Loaded index — {self._index.ntotal} vectors "
-            f"(dim={self._dim}, backend={meta['backend']})"
+            f"(dim={self._dim}, backend={meta['backend']}, integrity=verified)"
         )
 
     # ── Retrieval ──────────────────────────────────────────────────────────────
@@ -215,8 +311,9 @@ class OrbitalRAG:
             log.error("faiss-cpu not installed — RAG retrieval disabled.")
             return []
 
-        # Embed the query
-        q_vecs = self._embed([query])
+        # Embed the query (is_query=True selects the asymmetric query
+        # projection on backends that distinguish queries from documents)
+        q_vecs = self._embed([query], is_query=True)
         q_arr  = np.array(q_vecs, dtype=np.float32)
 
         # Faiss inner-product search (cosine sim since vectors are normalised)

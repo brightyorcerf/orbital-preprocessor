@@ -16,9 +16,14 @@ ultralytics>=8.1,<9.0          # YOLOv8 training + export API
 
 # ── ONNX inference (CPU; Dockerfile overrides with onnxruntime-gpu) ──────────
 onnxruntime>=1.17,<2.0
+onnx>=1.16,<2.0                # required by onnxruntime.quantization (INT8 PTQ)
 
 # ── Protobuf (wire format) ────────────────────────────────────────────────────
-protobuf>=4.25,<6.0
+# Floor is 5.29, NOT 4.25: inference/osp_pb2.py is gencode emitted by protoc
+# 5.29 and opens with ValidateProtobufRuntimeVersion(PUBLIC, 5, 29, 0). A clean
+# install that resolved to protobuf 4.x raised at import time, so the advertised
+# reproducible-install path was broken for anyone starting from scratch.
+protobuf>=5.29,<6.0
 
 # ── Ground dashboard ──────────────────────────────────────────────────────────
 streamlit>=1.32,<2.0

@@ -1,135 +1,189 @@
-# Orbital Scene Preprocessor
+# Orbital Scene Preprocessor (OSP)
 
-https://osp-command-centre.streamlit.app/
+**On-board multispectral perception with a deterministic safety envelope around a generative reasoning layer.**
+
+[Live command centre →](https://osp-command-centre.streamlit.app/)
 
 ![img.jpg](img.jpg)
 
 ---
 
-> Target Platform: MOI-1A (100TOPS GPU / 4GB VRAM / OrbitLab Environment)
+## 1. The problem, stated precisely
 
-## 1. Executive Summary
-OSP transforms MOI-1A from a passive sensor into an **Active Analyst**. By shifting compute-heavy perception to the edge, OSP delivers a compression ratio of ~85,000:1 (downlinking a 1.2KB JSON brief instead of a 100MB+ raw file). This provides >99.99% bandwidth reduction per scene at near-zero RF cost. Utilizes protobuff and token-mapping.
+An Earth-observation payload generates data orders of magnitude faster than it can downlink it. The usual framing is that on-board inference is a *bandwidth optimisation*. On a sufficiently constrained platform it stops being an optimisation and becomes the only thing that works at all:
 
----
+| Platform profile | Contact capacity | Can it downlink one 100 MB scene? | Semantic briefs per contact |
+| :--- | ---: | :--- | ---: |
+| `moi-1a` (2 Mbps × 8 min) | 122.9 MB | Yes — barely, using the entire pass | 102,400 |
+| `skyroot-oam` (32 kbps × 5 min) | 1.2 MB | **No.** Not one. | 1,000 |
 
-## 2. Product Vision
-Turn OrbitLab into a Semantic API for Earth Intelligence.
+OSP downlinks a compact structured brief instead of imagery. On the constrained profile that is the difference between one scene per *hundred* contacts and a thousand scenes per contact.
 
-* On-Board: 6-band quantized feature extraction.
-* Downlink: Minimalist metadata "tokens."
-* Ground-Side: 2D Situational Awareness map + LLM reasoning.
-* Spectral Logic: Exploits Short-Wave Infrared (SWIR) reflectance contrast (B11/B12) to identify man-made vessel materials that exhibit distinct spectral fingerprints compared to ocean water, even in low-visibility conditions.
+### Measured compression (`python test_pipeline.py`, T8)
 
----
+| Comparison | Ratio | Coverage |
+| :--- | ---: | :--- |
+| Protobuf brief (226 B) vs raw tile (9.83 MB) | **43,497:1** | same area — the honest per-tile figure |
+| Protobuf vs JSON | 2.4× | same content |
+| Scene-level, normalised | **1,432:1** | charges the scene all 324 briefs needed to cover it |
+| ~~Scene-level, unnormalised~~ | ~~463,972:1~~ | **do not quote** — one tile's brief vs a whole scene |
 
-## 3. Functional Requirements
+That last row is why this table exists. An earlier version of this README led with "85,000:1", which came from dividing a single tile's brief by a full 100 MB scene. A Sentinel-2 scene is 10980×10980 px — 324 tiles of 640×640 — so one brief covers 1/324th of the area being compared against, inflating the ratio by that factor. The normalised number is ~30× smaller and still an overwhelming argument.
 
-| Feature | Requirement | Implementation Detail |
-| :--- | :--- | :--- |
-| **Spectral Detector** | 6-band object detection (B2, B3, B4, B8, B11, B12). | YOLOv8n with 6-channel stem-swap; INT8 quantized. Post-processing (NMS) runs on-board for clean JSON output. |
-| **Spectral Handling** | Utilize NIR (B8) and SWIR (B11/12). | B11/B12 resampled to 10m via bilinear interpolation for spatial alignment with RGB/NIR grid. Exploits SWIR reflectance contrast for dark-ship detection through light atmospheric haze |
-| **JSON Schema** | LLM-ready <2KB payload. | Includes: `scene_id`, `cloud_cover`, `anomalies: [{type, lat_lon, conf}]`. |
-| **Command Center** | 2D Interactive Map Dashboard. | **Streamlit + Leaflet/Folium**: Visualizes tile footprints and anomaly pins. |
-| **LLM Reasoning** | Ground-side "Analyst" wrapper. | **Gemini 1.5 Pro**: Parses JSON to generate risk-weighted alerts. |
+> Both link budgets are `DERIVED` engineering assumptions, not operator specifications. See §6 on provenance — the repo distinguishes measured, published, and assumed numbers, and so does this README.
 
 ---
 
-## 4. OVV API Contract & Deployment Spec
+## 2. Architecture
 
-### OVV API Contract (Closed-Loop Verification)
-* Request (Ground → Sat): `{"request_id": "REQ-001", "target_coords": [lat, lon], "reason": "high_uncertainty", "priority": 1}`
-* Response (Sat → Ground): `{"status": "scheduled", "eta_minutes": 92, "payload_format": "256x256_crop_base64"}`
+```
+ ON-BOARD (constrained)                    │  GROUND (unconstrained)
+ ─────────────────────                     │  ─────────────────────
+ 6-band L2A tile                           │
+   → stem-swapped YOLOv8n (INT8 ONNX)      │
+   → per-class NMS                         │
+   → geo projection                        │
+   → OSP brief  (~1.2 KB JSON / protobuf) ─┼─→  RAG retrieval (FAISS)
+                                           │      → episodic memory (SQLite)
+                                           │      → ORION LLM reasoning
+                                           │           ↓
+                                           │      PolicyEngine (deterministic)
+                                           │           ↓  ← holds authority
+                                           │      reconciled verdict → OVV request
+```
 
-### Deployment Specification (OrbitLab Container)
-* Image: Dockerized Python 3.10 / ONNX Runtime-GPU.
-* Resource Caps: `--gpus 1 --memory 4g --cpus 2`.
-* Mount Points: `/input` (Source L2A tiles), `/output` (JSON telemetry).
-* Throughput: Batch mode processing; target latency **<800ms** per 1km² tile at INT8.
+**The load-bearing design decision:** the LLM never holds authority. `agent/mission_controller.py` computes a deterministic `PolicyEngine` verdict from the detection payload alone, then reconciles the LLM's assessment against it. If the reasoning layer is unavailable, disagrees, or returns something unparseable, the policy engine's verdict stands. This is what makes a generative component admissible on a platform with an assurance requirement — and `config/platforms.py` encodes `llm_in_control_loop = False` as a profile constraint rather than a convention.
 
 ---
 
-## 5. Non-Goals
+## 3. Perception layer
+
+| Component | Implementation |
+| :--- | :--- |
+| **Spectral stem swap** | YOLOv8n's 3-channel stem replaced with 6-channel (B2/B3/B4/B8/B11/B12). RGB channels warm-start from pretrained weights; NIR/SWIR channels initialise to the RGB weight mean rather than noise, so gradient flow is healthy from epoch 0. |
+| **Head re-shaping** | `Detect.cv3` classification branches rebuilt for 4 OSP classes, preserving the pretrained bias calibration on carried-over channels. |
+| **Quantization** | Static INT8 PTQ (QDQ format, per-channel weights, asymmetric uint8 activations), calibrated on real 6-band tiles using the *same* preprocessing path as inference. |
+| **Post-processing** | Per-class NMS via coordinate offsetting. Class-agnostic NMS deleted vessels berthed inside harbour boxes at IoU 0.73 — i.e. exactly the scenes of interest. |
+| **Spectral rationale** | B11/B12 SWIR reflectance separates man-made hull material from ocean water through light haze, where visible bands wash out. |
+
+### Reproducing the model artifacts
+
+```bash
+python data/synth_demo.py --n_train 32 --out data/input_debug   # synthetic 6-band tiles
+python model/stem_swap.py                                        # 6-ch stem + 4-class head
+python satellite_export.py --calib data/input_debug/images/train # FP32 export + INT8 PTQ
+```
+
+### Measured quantization results
+
+`python model/benchmark_quantization.py --platform skyroot-oam` regenerates every number below.
+
+| Metric | FP32 | INT8 | |
+| :--- | ---: | ---: | :--- |
+| Artifact size | 12.67 MB | **3.69 MB** | 3.43× smaller |
+| Latency (CPU, 640², seq.) | 118.1 ms | **66.8 ms** | 1.77× faster |
+| Mean relative divergence | — | **2.18 %** | max 2.49 % |
+| Bitwise determinism | — | **PASS** | identical output across runs |
+| `skyroot-oam` 400 ms budget | ✗ | **✓ MET** | at 6× margin |
+
+Two honest caveats:
+
+1. **3.69 MB does not meet the "<3 MB" target this README used to claim.** The old figure was never measured. The real number is 3.69 MB, and the target is now stated as unmet rather than quietly restated.
+2. **Divergence is measured against an untrained re-headed model.** It characterises the quantization step, not detection accuracy. Accuracy retention requires a trained checkpoint — see §7.
+
+Output shape `(1, 8, 8400)` — 4 box + 4 class channels — confirms the head is genuinely 4-class in the exported graph, which is what the previous version got wrong.
+
+---
+
+## 4. Reasoning layer (ORION)
+
+Structured generative analysis over the downlinked brief, grounded three ways:
+
+- **RAG** — 14 curated maritime knowledge chunks (UNCLOS/EEZ, IMO AIS carriage, dark-vessel behaviour, SWIR physics, OVV trigger policy) embedded into FAISS. The index is content-fingerprinted and rebuilds automatically if the corpus drifts, because a stale vector index fails *silently and plausibly* — the worst failure mode a grounded system can have.
+- **Episodic memory** — detections persist across orbital passes in SQLite, so recurring anomalies escalate rather than being re-derived from scratch each pass.
+- **Constrained decoding** — the response schema is enforced by the provider's structured-output mode. Earlier versions asked the model in-prompt to avoid double quotes and then regex-scraped failures; that salvage path fabricated `conf: 0.5` values which flowed straight into the faithfulness metric.
+
+---
+
+## 5. Evaluation — the part that would embarrass me if it were fake
+
+`ground/eval_suite.py` scores every brief on **six independently-failing axes**:
+
+| Axis | Catches |
+| :--- | :--- |
+| `schema_validity` | structurally unusable output |
+| `entity_grounding` | omissions, hallucinated detections, class substitutions (geodesic greedy matching — order-invariant) |
+| `coordinate_fidelity` | positions the model generated rather than transcribed |
+| `numeric_fidelity` | confidence values that were never downlinked |
+| `citation_validity` | fabricated chunk IDs — **and** real IDs that were never retrieved (cited from parametric memory, which a naive checker passes) |
+| `policy_consistency` | disagreement with the deterministic policy engine, penalised asymmetrically: under-escalation costs 2× over-escalation, because downgrading a real threat is the safety-critical direction |
+
+The composite score is the **minimum** across axes, not the mean: a brief that invents coordinates is not redeemed by scoring well on schema validity.
+
+This replaced a metric that compared `len(anomalies)` to `len(anomaly_assessments)` and returned 1.0 on equality. That metric scored a **perfect 1.0** on briefs that substituted classes, invented coordinates 400 km away, fabricated every confidence value, cited non-existent evidence, or downgraded a RED scene to GREEN. All six are now regression cases.
+
+```bash
+python -m ground.eval_suite --telemetry data/telemetry_out --live --fail-under 0.8
+```
+
+Two-tier distance gating: entity matching is generous (3 km — identify *which* detection is meant), coordinate fidelity is strict (500 m — coordinates are transcribed, not estimated).
+
+---
+
+## 6. Platform profiles and number provenance
+
+`config/platforms.py` makes the deployment target data rather than scattered constants. Every field carries a provenance tag:
+
+- `PUBLISHED` — stated publicly by the operator
+- `MEASURED` — measured by us on representative hardware
+- `DERIVED` — an engineering assumption, to be replaced when real specs are available
+
+```bash
+python config/platforms.py                                    # print both profiles
+OSP_PLATFORM=skyroot-oam python inference/engine.py --model ... # select at runtime
+```
+
+The engine enforces the active profile: execution providers come from the profile (not "use CUDA if you can find it", which would make ground-side timings unrepresentative of flight), and briefs exceeding the link budget or tiles exceeding the latency budget are flagged.
+
+**The `skyroot-oam` profile is a DERIVED envelope for a launch-vehicle upper-stage compute class. It is not a Skyroot specification and does not claim to be one.** It is deliberately sized an order of magnitude below `moi-1a` so that the INT8 and compression work has to actually matter.
+
+> **Note for future me:** this repo used to be hard-wired to one operator (TakeMe2Space / MOI-1A). Rather than keeping two diverging copies of the project, that original state was frozen as branch `tm2space-original` (tag `v1.0-tm2space`) and `main` was generalised into one codebase with a swappable platform profile. `moi-1a` and `skyroot-oam` are just two entries in `PROFILES` — add a new operator by adding a new `PlatformProfile`, not by branching. Every field is tagged `PUBLISHED` (operator said so) / `MEASURED` (we tested it) / `DERIVED` (our assumption) specifically so a profile for a company we don't work for can never be mistaken for insider knowledge of their hardware.
+
+---
+
+## 7. Non-goals
+
+Stated explicitly so the scope is not mistaken for a claim:
+
 * Real-time AIS fusion or terrestrial database integration.
-* Flight-hardware radiation hardening certification.
-* Full-scale atmospheric correction engine (L2A assumed).
-* Dynamic quantization-aware training (QAT) for on-orbit updates.
-* Regulatory compliance for encrypted RF cross-links.
-* Training Data Scope: Simulates multispectral inference using domain-adapted RGB weights (channel mapping) due to current scarcity of public labeled multi-spectral detection datasets.
+* Flight-hardware radiation-hardening certification.
+* Full atmospheric correction (L2A input assumed).
+* Quantization-aware training for on-orbit model updates.
+* Encrypted RF cross-link regulatory compliance.
+* **Training data.** Detection is trained on synthetic 6-band tiles and domain-adapted RGB weights, because public labelled multispectral detection datasets are scarce. Detection accuracy numbers from this repo characterise the *pipeline*, not operational performance on real Sentinel-2 imagery.
+* **A trained detector.** The stem swap and 4-class head rebuild are verified in the exported graph, and the quantized model runs end-to-end at 66.8 ms — but the re-headed classification branches have not been trained, so `engine.py` currently emits **zero detections** on synthetic tiles. Everything downstream (serialisation, policy engine, RAG, memory, eval harness) is exercised against mock and recorded payloads. Training is the next piece of work, not a completed one.
 
 ---
 
-## 6. Success Metrics
+## 8. Running it
 
-| Metric | Target | Why TM2S Cares |
-| :--- | :--- | :--- |
-| Compression Ratio | >99.99% (85,000:1) | Reduces RF downlink load, maximizing the value of $2/min OrbitLab compute. |
-| Model Size | <3MB (INT8) | Enables concurrent co-location with other OrbitLab user apps. |
-| Inference Latency | <800 ms (INT8) | Ensures real-time anomaly flagging during orbital pass. |
-| Reproducibility   | Deterministic Execution | Critical for mission-assurance and ground-side debugging. |
-
----
-
-# Deployment & Local Simulation
-OSP is designed for the MOI-1A OrbitLab environment but can be fully simulated locally using the provided Dockerized sandbox.
-
-Prerequisites
-Hardware: NVIDIA GPU (Optional, defaults to CPU) | 4GB+ RAM.
-Environment: Conda or Python 3.10.
-
-1. Environment Setup
-```
-# Create the orbital-class environment
-conda create -n osp_dev python=3.10 -y
-conda activate osp_dev# Install mission-critical dependencies
+```bash
+conda create -n osp_dev python=3.10 -y && conda activate osp_dev
 pip install -r requirements.txt
-```
 
-2. Synthetic Data Generation
-Since raw 6-band L2A satellite data is heavy, use the OSP Synth-Engine to generate test tiles:
-
-```
 python data/synth_demo.py --n_train 20 --out data/input_debug
-```
+python model/stem_swap.py
+python satellite_export.py --calib data/input_debug/images/train
 
-3. Model Export (The "Stem-Swap")
-OSP utilizes a custom 6-channel YOLOv8n stem. To generate the deployment-ready ONNX artifact:
-
-```
-python satellite_export.py
-```
-
-4. Run the Edge Inference Engine
-Simulate the on-orbit preprocessor. This will transform ~100MB of raw spectral data into a <2KB JSON brief.
-Bash
-
-```
 python inference/engine.py \
---model model/artifacts/osp_yolov8n_int8.onnx \
---tiles data/input_debug/images/train \
---out data/telemetry_out
-```
+  --model model/artifacts/osp_yolov8n_int8.onnx \
+  --tiles data/input_debug/images/train \
+  --out   data/telemetry_out \
+  --platform skyroot-oam
 
-5. Launch Command Centre
-Visualize the 2D tactical map, 3D orbital globe, and LLM-powered "ORION" risk analysis:
-
-```
 streamlit run ground/dashboard.py
 ```
 
-# GenAI capabilities 
+Requires `GEMINI_API_KEY` for the ORION reasoning layer. Everything upstream of it — perception, quantization, serialisation, the policy engine — runs without any API key.
 
-OSP extends beyond traditional object detection by integrating grounded Generative AI directly into the orbital intelligence pipeline. Instead of treating the language model as a simple summarization layer, the system uses structured reasoning to transform compact anomaly telemetry into actionable mission intelligence. The onboard inference engine extracts semantic signals from multispectral imagery, while the ground-side GenAI stack evaluates uncertainty, retrieves contextual knowledge, and generates risk-aware operational decisions.
-
-The project incorporates Retrieval-Augmented Generation (RAG) to reduce hallucination risk and improve explainability. Maritime rules, restricted-zone policies, historical anomaly logs, and spectral heuristics are indexed using a vector database and retrieved dynamically during analysis. This allows the reasoning engine to ground every generated assessment in domain-specific evidence instead of relying solely on model priors. The result is a more reliable and auditable intelligence workflow suitable for safety-critical environments.
-
-OSP also introduces episodic memory and agentic mission orchestration. Detection events are persisted across orbital passes, enabling the system to identify recurring anomalies and reason temporally rather than treating every scene independently. A lightweight orbital mission controller autonomously performs retrieval, reasoning, uncertainty evaluation, and OVV scheduling through a structured detect → retrieve → reason → decide → log pipeline. This transforms the system from a passive detector into an active orbital intelligence agent capable of initiating follow-up actions.
-
-The overall architecture combines edge AI, multimodal perception, semantic compression, grounded LLM reasoning, and explainable decision-making into a unified Earth observation system. By coupling onboard multispectral inference with structured GenAI workflows, OSP demonstrates how modern satellite systems can evolve from raw imaging platforms into autonomous semantic intelligence infrastructure. 
-
-Also implemented the "LLM-as-a-Judge" / Evaluation Loop framework to evaluate Grounding Accuracy (Faithfulness).
-
-- Ground Truth Verification: It calculates the precise number of anomalies reported by the initial telemetry payload (the JSON data).
-- LLM Report Extraction: It parses the LLM's returned JSON dictionary (specifically focusing on the anomaly_assessments array output by llm_analyst.py) to see what ORION actually reported.
-- Faithfulness Evaluation: It directly contrasts the two outputs. If the LLM misses an anomaly, it fails with "Omission (Under-reporting)". If the LLM generates a non-existent anomaly, it fails with "Hallucination (Over-reporting)".
-- Accuracy Score: It returns 1.0 if faithful, and 0.0 if any hallucination/omission occurs, directly feeding the metric for your "End-to-End Metrics" slide.
+Deployment: Dockerised Python 3.10 + ONNX Runtime, `--gpus 1 --memory 4g --cpus 2`, `/input` and `/output` mounts.

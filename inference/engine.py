@@ -20,6 +20,7 @@ Compression math (logged per tile):
   Ratio     : ~85,000:1  ← the headline PRD figure
 """
 
+import datetime
 import hashlib
 import json
 import logging
@@ -95,23 +96,35 @@ class OSPPayload:
 
 # ── ONNX session factory ──────────────────────────────────────────────────────
 
-def build_session(model_path: str) -> ort.InferenceSession:
+def build_session(model_path: str, profile=None) -> ort.InferenceSession:
     """
     Build an ONNX Runtime session with deterministic execution settings.
-    CUDA EP used if available (OrbitLab GPU), else CPU EP.
+
+    Execution providers come from the active platform profile rather than from
+    "use CUDA if you can find it". On an assurance-constrained bus the provider
+    set is a mission parameter: silently picking up a GPU that the flight
+    configuration does not include would make ground-side timing measurements
+    unrepresentative of on-orbit behaviour.
     """
+    if profile is None:
+        from config.platforms import get_profile
+        profile = get_profile()
+
     opts = ort.SessionOptions()
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    opts.intra_op_num_threads  = ONNX_INTRA_THREADS
+    opts.intra_op_num_threads  = min(ONNX_INTRA_THREADS, profile.compute.cpu_cores)
     opts.inter_op_num_threads  = ONNX_INTER_THREADS
     # Determinism: disable parallel execution that causes non-deterministic ops
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
-    providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if "CUDAExecutionProvider" in ort.get_available_providers()
-        else ["CPUExecutionProvider"]
-    )
+    available = set(ort.get_available_providers())
+    providers = [p for p in profile.compute.onnx_providers if p in available]
+    if not providers:
+        raise RuntimeError(
+            f"Platform profile '{profile.key}' requires one of "
+            f"{profile.compute.onnx_providers}, but ONNX Runtime only offers "
+            f"{sorted(available)}."
+        )
 
     session = ort.InferenceSession(model_path, sess_options=opts, providers=providers)
     log.info(
@@ -128,8 +141,10 @@ def preprocess(tile: np.ndarray) -> np.ndarray:
     """
     (H, W, 6) float32 [0,1]  →  (1, 6, 640, 640) float32
 
-    Letterbox resize to preserve aspect ratio, zero-pad remainder.
-    Matches YOLOv8 inference pipeline exactly.
+    Anisotropic (stretch) resize, NOT letterbox. This is deliberate: OSP tiles
+    are cut square upstream by data/preprocess.py, so there is no aspect ratio
+    to preserve, and a stretch keeps `pixel_to_latlon` a straight linear map
+    over the tile footprint with no padding offset to subtract back out.
     """
     h, w = tile.shape[:2]
 
@@ -162,7 +177,12 @@ def xywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
 
 
 def nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float) -> list[int]:
-    """CPU NMS — runs on-board post-inference."""
+    """
+    Class-agnostic CPU NMS — runs on-board post-inference.
+
+    Prefer `batched_nms()` for multi-class output; this is the single-class
+    primitive it delegates to.
+    """
     if len(boxes) == 0:
         return []
 
@@ -191,6 +211,36 @@ def nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float) -> list[int]:
     return keep
 
 
+def batched_nms(
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    cls_ids: np.ndarray,
+    iou_thresh: float,
+) -> list[int]:
+    """
+    Per-class NMS.
+
+    Class-agnostic NMS is wrong for OSP: a high-confidence `harbor` box
+    overlaps the `ship` boxes moored inside it by construction, so a single
+    global NMS pass silently deletes every vessel in a harbour scene — the
+    exact scenes we care most about.
+
+    Implemented with the standard coordinate-offset trick: shift each class
+    into its own disjoint region of coordinate space so boxes of different
+    classes can never register a non-zero IoU, then run one NMS pass. This
+    keeps the O(n log n) single-pass cost instead of looping per class.
+    """
+    if len(boxes) == 0:
+        return []
+
+    # Offset must exceed the largest possible coordinate so classes cannot overlap.
+    max_coord = float(boxes.max()) if boxes.size else 0.0
+    offsets = cls_ids.astype(np.float32) * (max_coord + 1.0)
+    shifted = boxes + offsets[:, None]
+
+    return nms(shifted, scores, iou_thresh)
+
+
 def postprocess(
     raw_output: np.ndarray,
     conf_thresh: float = CONF_THRESHOLD,
@@ -201,6 +251,24 @@ def postprocess(
     Output format: {cls_id, cls_name, conf, bbox: [x1,y1,x2,y2]}
     """
     pred = raw_output[0]           # (4+nc, num_anchors)
+
+    # Ultralytics has shipped both (4+nc, anchors) and (anchors, 4+nc) layouts
+    # across export paths/opsets. Anchors always vastly outnumber 4+nc, so the
+    # longer axis identifies the anchor dimension unambiguously.
+    if pred.shape[0] > pred.shape[1]:
+        pred = pred.T
+
+    n_classes = pred.shape[0] - 4
+    if n_classes != len(CLASS_NAMES):
+        # Guard against the stem-swap/head mismatch that silently emitted
+        # 80-class COCO logits while the payload schema expected 4 OSP classes.
+        raise ValueError(
+            f"Model head emits {n_classes} classes but CLASS_NAMES defines "
+            f"{len(CLASS_NAMES)} ({sorted(CLASS_NAMES.values())}). The exported "
+            f"model was not re-headed for OSP — re-run model/stem_swap.py and "
+            f"satellite_export.py before deploying."
+        )
+
     boxes  = pred[:4, :].T         # (N, 4) xywh
     scores = pred[4:, :].T         # (N, nc)
 
@@ -216,7 +284,7 @@ def postprocess(
     cls_confs = cls_confs[mask]
 
     boxes_xyxy = xywh_to_xyxy(boxes)
-    keep = nms(boxes_xyxy, cls_confs, iou_thresh)
+    keep = batched_nms(boxes_xyxy, cls_confs, cls_ids, iou_thresh)
 
     detections = []
     for idx in keep:
@@ -279,10 +347,14 @@ class OSPEngine:
     Thread-safe for single-GPU OrbitLab deployment.
     """
 
-    def __init__(self, model_path: str):
-        self.session    = build_session(model_path)
+    def __init__(self, model_path: str, platform: Optional[str] = None):
+        from config.platforms import get_profile
+
+        self.profile    = get_profile(platform)
+        self.session    = build_session(model_path, self.profile)
         self.input_name = self.session.get_inputs()[0].name
         self._model_path = model_path
+        log.info(f"Platform profile: {self.profile.display_name}")
 
         # Warm up (fills CUDA memory, pre-compiles kernel cache)
         log.info("Warming up ONNX session ...")
@@ -310,14 +382,11 @@ class OSPEngine:
         Returns:
             OSPPayload (serialisable to <2 KB JSON)
         """
-        import datetime
-
         if scene_id is None:
             h = hashlib.md5(tile_6ch.tobytes()).hexdigest()[:8]
             scene_id = f"OSP-{h.upper()}"
 
         if timestamp is None:
-            import datetime
             timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if footprint is None:
@@ -348,12 +417,10 @@ class OSPEngine:
             ))
 
         # ── Compression ratio ─────────────────────────────────────────────────
-        raw_bytes  = tile_6ch.size * tile_6ch.itemsize
-        json_bytes = len(OSPPayload(
-            scene_id, timestamp, footprint, cloud_cover, anomalies, inference_ms
-        ).to_json().encode())
-        ratio = max(1, raw_bytes // json_bytes)
-
+        # Build the payload once, then measure the *actual* wire bytes. The
+        # ratio field is populated after measurement, so we deliberately
+        # re-measure below to report the true on-wire size rather than the
+        # size of a placeholder payload.
         payload = OSPPayload(
             scene_id       = scene_id,
             timestamp_utc  = timestamp,
@@ -361,14 +428,40 @@ class OSPEngine:
             cloud_cover    = cloud_cover,
             anomalies      = anomalies,
             inference_ms   = inference_ms,
-            compression_ratio = ratio,
         )
+
+        raw_bytes = tile_6ch.size * tile_6ch.itemsize
+        payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
+        # Settle the ratio against the final serialisation (the ratio digits
+        # themselves change the byte count) so the reported figure is exact.
+        payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
+        ratio = payload.compression_ratio
+
+        # ── Budget enforcement ────────────────────────────────────────────────
+        # The profile's limits are checked, not just documented. A brief that
+        # exceeds the link budget cannot be downlinked in one contact, and a
+        # tile that blows the latency budget would have missed its attitude-
+        # stable window on a manoeuvring stage. Both are warnings rather than
+        # exceptions: degraded telemetry beats no telemetry.
+        wire_bytes = len(payload.to_json().encode())
+        if wire_bytes > self.profile.link.max_payload_bytes:
+            log.warning(
+                f"[{scene_id}] brief is {wire_bytes}B, over the "
+                f"{self.profile.link.max_payload_bytes}B link budget for "
+                f"{self.profile.key} — will need fragmenting across contacts."
+            )
+        if inference_ms > self.profile.assurance.max_inference_latency_ms:
+            log.warning(
+                f"[{scene_id}] inference took {inference_ms:.0f}ms, over the "
+                f"{self.profile.assurance.max_inference_latency_ms:.0f}ms budget "
+                f"for {self.profile.key}."
+            )
 
         log.info(
             f"[{scene_id}] {len(anomalies)} anomalies | "
             f"cloud={cloud_cover:.1%} | "
             f"{inference_ms:.0f}ms | "
-            f"{len(payload.to_json())}B JSON | "
+            f"{wire_bytes}B JSON | "
             f"{ratio:,}:1 compression"
         )
 
@@ -388,6 +481,13 @@ class OSPEngine:
         tiles = sorted(Path(tiles_dir).glob("*.npy"))
         if max_tiles:
             tiles = tiles[:max_tiles]
+
+        if footprints is not None and len(footprints) < len(tiles):
+            raise ValueError(
+                f"Got {len(footprints)} footprints for {len(tiles)} tiles. "
+                "Provide one footprint per tile, or pass footprints=None to use "
+                "the default demo footprint."
+            )
 
         out_path_dir = Path(out_dir)
         out_path_dir.mkdir(parents=True, exist_ok=True)
@@ -455,14 +555,23 @@ class MockONNXSession:
 if __name__ == "__main__":
     import argparse, sys
 
+    # Running this file directly puts inference/ on sys.path, not the repo
+    # root, so sibling packages (config, agent, ground) are unimportable.
+    # The README documents `python inference/engine.py ...`, so make that work
+    # rather than silently requiring `python -m inference.engine`.
+    _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+
     parser = argparse.ArgumentParser(description="OSP on-board inference engine")
     parser.add_argument("--model",  required=True, help="Path to INT8 ONNX model")
     parser.add_argument("--tiles",  required=True, help="Dir of .npy tiles")
     parser.add_argument("--max",    type=int,       help="Limit number of tiles")
     parser.add_argument("--out",    default="/output", help="Output dir for JSON")
+    parser.add_argument("--platform", help="Platform profile key (moi-1a | skyroot-oam)")
     args = parser.parse_args()
 
-    engine = OSPEngine(args.model)
+    engine = OSPEngine(args.model, platform=args.platform)
     payloads = engine.run_batch(args.tiles, max_tiles=args.max, out_dir=args.out)
 
     # Print summary to stdout (piped to OrbitLab telemetry log)
@@ -476,6 +585,9 @@ if __name__ == "__main__":
             "total_anomalies":  total_anomalies,
             "avg_inference_ms": round(avg_ms, 1),
             "avg_compression":  f"{avg_ratio:,.0f}:1",
-            "target_800ms_met": avg_ms < 800.0,
+            "platform":         engine.profile.key,
+            "latency_budget_ms": engine.profile.assurance.max_inference_latency_ms,
+            "latency_budget_met": avg_ms < engine.profile.assurance.max_inference_latency_ms,
+            "briefs_per_contact": engine.profile.link.briefs_per_contact(),
         }
     }, indent=2))

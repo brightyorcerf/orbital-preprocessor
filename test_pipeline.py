@@ -138,19 +138,24 @@ def build_mock_engine():
     """Build an OSPEngine with session replaced by MockONNXSession."""
     import inference.engine as eng
 
+    from config.platforms import get_profile
+
     # Temporarily patch build_session to return mock
     orig_build = eng.build_session
 
-    def mock_build(path):
+    def mock_build(path, profile=None):
         return MockONNXSession()
 
     eng.build_session = mock_build
     engine = eng.OSPEngine.__new__(eng.OSPEngine)
 
-    # Manually initialise (skip warm-up to avoid CUDA calls)
+    # Manually initialise (skip warm-up to avoid CUDA calls).
+    # `profile` must be set explicitly: __init__ is bypassed here, and run_tile
+    # consults the profile for link/latency budget enforcement.
     engine.session    = MockONNXSession()
     engine.input_name = "images"
     engine._model_path = "mock://osp-yolov8n-int8-v1.onnx"
+    engine.profile    = get_profile("moi-1a")
 
     eng.build_session = orig_build  # restore
     return engine

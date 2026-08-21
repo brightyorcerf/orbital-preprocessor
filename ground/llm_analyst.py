@@ -56,9 +56,9 @@ SWIR physics: B11/B12 provide strong metallic contrast even through haze. \
 Low confidence + SWIR anomaly = treat as medium confidence. \
 Cloud cover > 30% degrades visible bands — do not downgrade alert level for cloud.
 
-Output ONLY valid JSON. No markdown fences (```json), no preamble, no explanation outside the JSON.
-CRITICAL INSTRUCTION 1: Never use double quotes (") inside your text values. Use single quotes (') instead to avoid breaking the JSON.
-CRITICAL INSTRUCTION 2: Ensure your JSON is completely valid, well-formed, and not truncated. The output MUST end with a closing brace '}'.
+Return your brief as a single JSON object conforming to the schema below.
+Structured decoding is enforced by the API, so write naturally — you do not
+need to avoid punctuation or worry about escaping.
 
 JSON schema you MUST return:
 {
@@ -98,6 +98,77 @@ Alert level escalation:
   ORANGE : Any conf >= 0.70, OR any risk zone overlap, OR cloud-masked historical area.
   RED    : Cluster >=3 vessels, aircraft, conf >= 0.85 in risk zone, OR recurring (3+ passes).
 """
+
+
+# ── Response schema (enforced by the provider's structured-decoding mode) ─────
+#
+# The previous version asked the model, in the prompt, to "never use double
+# quotes" and to make sure its JSON was "not truncated", then salvaged failures
+# with a regex scraper. That is a prompt-level workaround for a decoding-level
+# problem: it degrades writing quality, still fails on nested structures, and
+# the salvage path silently fabricated conf=0.5 for recovered anomalies —
+# feeding invented numbers into the very evaluation metric that is supposed to
+# measure faithfulness.
+#
+# Declaring the schema instead constrains decoding so malformed JSON is not
+# representable. `propertyOrdering` matters for Gemini: it generates fields in
+# the given order, and putting reasoning_trace before the assessments means the
+# model has already committed to its reasoning tokens before it emits verdicts.
+
+ORION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "alert_level": {"type": "string", "enum": ["GREEN", "YELLOW", "ORANGE", "RED"]},
+        "summary": {"type": "string"},
+        "scene_narrative": {"type": "string"},
+        "reasoning_trace": {"type": "array", "items": {"type": "string"}},
+        "anomaly_assessments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "risk_tier": {
+                        "type": "string",
+                        "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                    },
+                    "reasoning": {"type": "string"},
+                    "uncertainty_factors": {"type": "array", "items": {"type": "string"}},
+                    "lat_lon": {"type": "array", "items": {"type": "number"}},
+                    "conf": {"type": "number"},
+                    "spectral_notes": {"type": "string"},
+                },
+                "required": ["type", "risk_tier", "reasoning", "lat_lon", "conf"],
+                "propertyOrdering": [
+                    "type", "risk_tier", "reasoning", "uncertainty_factors",
+                    "lat_lon", "conf", "spectral_notes",
+                ],
+            },
+        },
+        "evidence_used": {"type": "array", "items": {"type": "string"}},
+        "ovv_recommendation": {
+            "type": "object",
+            "properties": {
+                "trigger": {"type": "boolean"},
+                "reason": {"type": "string"},
+                "priority": {"type": "integer"},
+                "target_coords": {"type": "array", "items": {"type": "number"}},
+            },
+            "required": ["trigger", "reason", "priority"],
+            "propertyOrdering": ["trigger", "reason", "priority", "target_coords"],
+        },
+        "bandwidth_note": {"type": "string"},
+    },
+    "required": [
+        "alert_level", "summary", "scene_narrative", "reasoning_trace",
+        "anomaly_assessments", "evidence_used", "ovv_recommendation",
+    ],
+    "propertyOrdering": [
+        "alert_level", "summary", "scene_narrative", "reasoning_trace",
+        "anomaly_assessments", "evidence_used", "ovv_recommendation",
+        "bandwidth_note",
+    ],
+}
 
 
 # ── Prompt builder (v2 — includes RAG + memory context) ───────────────────────
@@ -208,6 +279,11 @@ def call_gemini(
         temperature=0.1,     # Low temp: deterministic structured output
         top_p=0.95,
         max_output_tokens=4096,   # increased for reasoning trace
+        # Constrained decoding: the model physically cannot emit malformed
+        # JSON or an out-of-enum alert level, which removes an entire class
+        # of downstream parse failures instead of repairing them after the fact.
+        response_mime_type="application/json",
+        response_schema=ORION_RESPONSE_SCHEMA,
     )
 
     gemini_model = genai.GenerativeModel(
@@ -254,7 +330,12 @@ def call_openai_compatible(
             {"role": "user",    "content": user_message},
         ],
         temperature=0.1,
-        max_tokens=2048,
+        # Matched to the Gemini path: 2048 truncated mid-object once the
+        # reasoning trace and per-anomaly assessments were both populated,
+        # which was a significant share of the "malformed JSON" we were
+        # blaming on the model's formatting.
+        max_tokens=4096,
+        response_format={"type": "json_object"},
     )
 
     raw_text = response.choices[0].message.content.strip()
@@ -281,46 +362,40 @@ def _parse_llm_json(raw: str) -> dict:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
+        # With constrained decoding enabled upstream, reaching this branch means
+        # something structural is wrong (wrong model, provider outage, an
+        # endpoint that ignores response_schema) — not that the model wrote a
+        # stray quote.
+        #
+        # The previous implementation regex-scraped whatever it could and
+        # emitted synthetic assessments with a hardcoded `conf: 0.5`. That was
+        # actively harmful: those fabricated entries flowed straight into
+        # eval_suite's faithfulness metric, so a total parse failure could still
+        # score 1.0 "faithful" as long as the scraped count happened to match.
+        # A degraded read is fine; inventing data to make a metric pass is not.
         log.error(f"LLM output is not valid JSON: {e}")
         log.debug(f"Raw LLM output:\n{raw}")
-        
-        # Regex fallback to salvage as much as possible for the dashboard
-        import re
-        fallback = {
+
+        return {
             "alert_level": "UNKNOWN",
-            "summary": f"Parse error ({e}). Salvaged data shown.",
-            "scene_narrative": "Partial analysis recovered.",
+            "summary": (
+                "Analysis unavailable: the reasoning layer returned an "
+                "unparseable response. Falling back to deterministic policy "
+                "assessment — see the policy engine verdict."
+            ),
+            "scene_narrative": "",
             "reasoning_trace": [],
             "anomaly_assessments": [],
             "evidence_used": [],
-            "ovv_recommendation": {"trigger": False, "reason": "parse error", "priority": 5},
-            "bandwidth_note": "Recovered via regex fallback.",
+            "ovv_recommendation": {
+                "trigger": False,
+                "reason": "LLM unavailable; deferring to PolicyEngine",
+                "priority": 5,
+            },
+            "bandwidth_note": "",
+            "_parse_error": str(e),
             "_raw": raw[:500],
         }
-        
-        al_match = re.search(r'"alert_level"\s*:\s*"([^"]+)"', raw)
-        if al_match: fallback["alert_level"] = al_match.group(1)
-        
-        sum_match = re.search(r'"summary"\s*:\s*"([^"]+)"', raw)
-        if sum_match: fallback["summary"] = sum_match.group(1)
-        
-        nar_match = re.search(r'"scene_narrative"\s*:\s*"([^"]+)"', raw)
-        if nar_match: fallback["scene_narrative"] = nar_match.group(1)
-        
-        # Attempt to recover anomaly assessments if present
-        if '"anomaly_assessments"' in raw and '"type"' in raw:
-            types = re.findall(r'"type"\s*:\s*"([^"]+)"', raw)
-            risks = re.findall(r'"risk_tier"\s*:\s*"([^"]+)"', raw)
-            for i in range(min(len(types), 3)):
-                risk = risks[i] if i < len(risks) else "UNKNOWN"
-                fallback["anomaly_assessments"].append({
-                    "type": types[i],
-                    "risk_tier": risk,
-                    "reasoning": "Recovered from malformed JSON stream.",
-                    "conf": 0.5
-                })
-                
-        return fallback
 
 
 # ── Main entry ────────────────────────────────────────────────────────────────
@@ -336,21 +411,26 @@ class OrbitalAnalyst:
 
     def __init__(
         self,
-        provider: str = "gemini",      # "gemini" | "openai" | "anthropic"
+        provider: str = "gemini",      # "gemini" | "openai"
         api_key:  Optional[str] = None,
         model:    Optional[str] = None,
         use_rag:  bool = True,
         use_memory: bool = True,
         rag_backend: str = "sentence_transformers",
+        base_url: Optional[str] = None,
     ):
+        # NOTE: the "anthropic" provider was removed rather than fixed. It
+        # pointed call_openai_compatible() at https://api.anthropic.com/v1,
+        # which is not an OpenAI-shaped endpoint — that path could never have
+        # returned a response. Any OpenAI-compatible gateway (including ones
+        # fronting Claude) still works via provider="openai" + base_url=.
         self.provider  = provider
+        self.base_url  = base_url
         self.api_key   = api_key or os.environ.get(
             "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
         )
         self.model = model or (
-            "gemini-2.5-flash"                    if provider == "gemini"    else
-            "gpt-4o-mini"                   if provider == "openai"    else
-            "claude-3-5-sonnet-20241022"
+            "gemini-2.5-flash" if provider == "gemini" else "gpt-4o-mini"
         )
         self.use_rag    = use_rag
         self.use_memory = use_memory
@@ -446,19 +526,10 @@ class OrbitalAnalyst:
                 payload_json, model=self.model, api_key=self.api_key,
                 rag_context=rag_context, historical_context=historical_context,
             )
-        elif self.provider == "anthropic":
-            brief = call_openai_compatible(
-                payload_json,
-                base_url="https://api.anthropic.com/v1",
-                api_key=self.api_key or os.environ.get("ANTHROPIC_API_KEY", ""),
-                model=self.model,
-                rag_context=rag_context,
-                historical_context=historical_context,
-            )
         elif self.provider == "openai":
             brief = call_openai_compatible(
                 payload_json,
-                base_url="https://api.openai.com/v1",
+                base_url=self.base_url or "https://api.openai.com/v1",
                 api_key=self.api_key,
                 model=self.model,
                 rag_context=rag_context,
@@ -466,8 +537,9 @@ class OrbitalAnalyst:
             )
         else:
             raise ValueError(
-                f"Unknown provider: {self.provider}. "
-                "Use 'gemini', 'anthropic', or 'openai'."
+                f"Unknown provider: {self.provider}. Use 'gemini' or 'openai'. "
+                "The 'openai' provider accepts any OpenAI-compatible endpoint "
+                "via base_url= (vLLM, Ollama, OpenRouter, LM Studio)."
             )
 
         # ── Step 4: Fill semantic narrative if LLM omitted it ─────────────────
