@@ -31,8 +31,11 @@ The three honest caveats, stated here rather than only in the README
 2. **Resolution does not match Sentinel-2.** DOTA is aerial, roughly 0.1-1 m
    GSD. Sentinel-2 is 10 m. Tiles produced here are therefore *not* what the
    declared orbital sensor would see, and briefs generated from them must say
-   so instead of inheriting the Sentinel-2 footprint fields. `--gsd-note` is
-   recorded in the manifest so downstream tooling cannot silently forget.
+   so instead of inheriting the Sentinel-2 footprint fields. This caveat is
+   always written into `provenance.gsd` in the manifest (there is no opt-out
+   flag — it is not user-configurable), so downstream tooling cannot silently
+   forget. `tools/generate_briefs.py` checks for this manifest and refuses to
+   run against a DOTA-derived split unless `--allow-aerial-gsd` is passed.
 
 3. **Oriented boxes are flattened.** DOTA annotates rotated quadrilaterals;
    OSP's pipeline, protobuf schema and scheduler all expect axis-aligned

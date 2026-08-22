@@ -100,6 +100,51 @@ DEFAULT_OUT = "data/briefs"
 DEFAULT_COUNT = 20
 
 
+def check_gsd_provenance(tiles_dir: Path, allow_aerial_gsd: bool) -> str | None:
+    """
+    Guard against silently applying Sentinel-2 footprint math to non-Sentinel-2
+    pixels.
+
+    The footprint math below (`GSD_METRES`, `TILE_KM`, `footprint_for`) is fixed
+    to Sentinel-2's 10 m grid. `data/dota_prep.py` produces tiles at ~0.1-1 m
+    aerial GSD and says so in `prep_manifest.json` — but nothing forced a reader
+    of *this* script to go find that file. Without this check, pointing
+    `--tiles` at a DOTA-derived split runs cleanly and writes briefs whose
+    `geolocation: "real"` claim and lat/lon footprints are wrong by one to two
+    orders of magnitude, with no error anywhere.
+
+    Looks for `prep_manifest.json` in the dataset root (two levels up from an
+    `images/<split>` tiles directory). Returns a caveat string to fold into
+    brief provenance when the tiles are aerial and the caller explicitly
+    allowed it; raises otherwise.
+    """
+    manifest_path = tiles_dir.parent.parent / "prep_manifest.json"
+    if not manifest_path.exists():
+        return None
+
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("generator") != "data/dota_prep.py":
+        return None
+
+    gsd_note = manifest.get("provenance", {}).get("gsd", "aerial imagery")
+    if not allow_aerial_gsd:
+        raise SystemExit(
+            f"{tiles_dir} is a DOTA-derived split ({manifest_path} says so). "
+            "Its GSD is aerial (~0.1-1 m), not the Sentinel-2 10 m grid this "
+            "script's footprint math assumes — running as-is would write briefs "
+            "with lat/lon footprints wrong by 10-100x while still labelling "
+            "geolocation as 'real'. Pass --allow-aerial-gsd to proceed anyway; "
+            "the resulting briefs will be relabelled to say the footprint is "
+            "approximate, not measured."
+        )
+    log.warning(
+        "Tiles are DOTA-derived aerial imagery, not Sentinel-2. Footprint math "
+        "still uses the Sentinel-2 10 m grid — geolocation in the output briefs "
+        "will be labelled approximate, not real."
+    )
+    return gsd_note
+
+
 def km_to_deg_lat(km: float) -> float:
     return math.degrees(km / EARTH_RADIUS_KM)
 
@@ -213,11 +258,19 @@ def main() -> None:
     ap.add_argument("--satellite", default=DEFAULT_SATELLITE)
     ap.add_argument("--platform", default="skyroot-oam")
     ap.add_argument("--no-thumbnails", action="store_true")
+    ap.add_argument("--allow-aerial-gsd", action="store_true",
+                    help="Permit running against a DOTA-derived tile split. The "
+                         "footprint math is still Sentinel-2's 10 m grid, so "
+                         "output geolocation is relabelled 'approximate' rather "
+                         "than 'real'. Without this flag, pointing --tiles at an "
+                         "aerial split refuses to run.")
     args = ap.parse_args()
 
     from inference.engine import OSPEngine
     from orbital.propagate import propagator_for
     from orbital.tle import load_snapshot
+
+    aerial_gsd_note = check_gsd_provenance(Path(args.tiles), args.allow_aerial_gsd)
 
     out_dir = Path(args.out)
     if out_dir.exists():
@@ -282,13 +335,25 @@ def main() -> None:
         # Provenance travels with the brief. Anyone reading it should be able to
         # tell which parts are measured and which are simulated without having
         # to find this script.
-        brief["provenance"] = {
-            "pixels": "synthetic (data/synth_demo.py), held-out validation split",
-            "detections": f"measured — {Path(args.model).name} INT8 ONNX inference",
-            "geolocation": (
+        if aerial_gsd_note is None:
+            pixels_note = "synthetic (data/synth_demo.py), held-out validation split"
+            geolocation_note = (
                 f"real — SGP4 propagation of {record.name} "
                 f"(NORAD {record.norad_id}), epoch {record.epoch:%Y-%m-%dT%H:%MZ}"
-            ),
+            )
+        else:
+            pixels_note = f"real — DOTA-v1.0 aerial imagery ({aerial_gsd_note})"
+            geolocation_note = (
+                f"approximate — SGP4 propagation of {record.name} "
+                f"(NORAD {record.norad_id}) gives a real ground track, but the "
+                f"footprint box assumes Sentinel-2's 10 m GSD, not this tile's "
+                f"actual aerial GSD. Do not treat as measured geolocation."
+            )
+
+        brief["provenance"] = {
+            "pixels": pixels_note,
+            "detections": f"measured — {Path(args.model).name} INT8 ONNX inference",
+            "geolocation": geolocation_note,
             "source_tile": tile_path.name,
             "subpoint": {
                 "lat": round(subpoint.latitude_deg, 6),
