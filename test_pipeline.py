@@ -909,6 +909,54 @@ def test_trained_detector():
             f"{r['detections_above_conf']} dets on {r['tiles']} tiles")
 
 
+@run_test("T16  Rate-distortion accounting (ground/rate_distortion.py)")
+def test_rate_distortion_accounting():
+    """The bytes-vs-detections curve must account undelivered tiles as missed.
+
+    The experiment replaces a single compression ratio with a curve, and the
+    single choice that makes it meaningful is the denominator: recall is over
+    *every* labelled object in the corpus, not over the objects on tiles that
+    happened to fit the budget. Score only the delivered tiles and every
+    strategy trends to 1.0, which is exactly the flattering non-result the
+    curve exists to avoid.
+
+    This runs without a trained artifact: the accounting is what is under test,
+    not the detector.
+    """
+    from ground.rate_distortion import Strategy, curve, summarise, brief_bytes
+
+    # Three tiles, 2 objects each, 6 total. Each tile costs 100 B and yields
+    # both of its objects when delivered.
+    s = Strategy("brief", 0.5, cost=[100, 100, 100], tp=[2, 2, 2], fp=[0, 0, 0])
+
+    pts = {p["budget_bytes"]: p for p in curve(s, total_gt=6,
+                                              budgets=np.array([0, 99, 100, 250, 300, 1000]))}
+
+    assert pts[0]["recall"] == 0.0,   "zero budget must recover nothing"
+    assert pts[99]["recall"] == 0.0,  "a budget below one tile must recover nothing"
+    assert abs(pts[100]["recall"] - 2/6) < 1e-9, f"one tile => 2/6, got {pts[100]['recall']}"
+    assert abs(pts[250]["recall"] - 4/6) < 1e-9, "two tiles => 4/6"
+    assert pts[300]["recall"] == 1.0,  "exact corpus budget must recover everything"
+    assert pts[1000]["recall"] == 1.0, "recall must saturate, never exceed 1.0"
+
+    # Recall must be monotonic in budget: more bytes can never mean less known.
+    ordered = [pts[b]["recall"] for b in sorted(pts)]
+    assert all(a <= b + 1e-12 for a, b in zip(ordered, ordered[1:])), \
+        f"recall not monotonic in budget: {ordered}"
+
+    # Precision must fall as false positives accumulate.
+    noisy = Strategy("jpeg", 2, cost=[100], tp=[1], fp=[3])
+    assert abs(summarise(noisy, 6)["precision"] - 0.25) < 1e-9
+
+    # A brief carrying more anomalies must cost more bytes. If this inverts,
+    # the confidence sweep is measuring nothing.
+    few  = brief_bytes([{"cls_id": 0, "conf": 0.9, "bbox": [1.0, 2.0, 3.0, 4.0]}], "T")
+    many = brief_bytes([{"cls_id": 0, "conf": 0.9, "bbox": [1.0, 2.0, 3.0, 4.0]}] * 8, "T")
+    assert many > few, f"8 anomalies ({many} B) not larger than 1 ({few} B)"
+
+    return f"undelivered counted as missed, monotonic, brief 1->8 anomalies {few}->{many} B"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 @run_test("T14  Tile storage formats agree (data/tiles.py)")
@@ -1048,6 +1096,7 @@ if __name__ == "__main__":
         test_trained_detector,
         test_tile_format_equivalence,
         test_dota_label_conversion,
+        test_rate_distortion_accounting,
     ]
 
     for t in tests:
