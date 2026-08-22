@@ -44,6 +44,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime
 import json
 import logging
@@ -76,38 +77,151 @@ class AugmentedTiles(torch.utils.data.Dataset):
     and mosaic would splice tiles with unrelated shorelines into one frame,
     teaching land/water boundaries that cannot occur.
 
+    Scale jitter is *not* in that excluded set, and its absence was costing
+    real accuracy. Flips and 90-degree rotations leave every object at exactly
+    the size the tiler produced, so the detector only ever sees a ship at one
+    apparent scale. Zoom is the one augmentation that matters most for small
+    objects in aerial imagery, and it is band-agnostic, so it is applied here.
+
     Gain and offset jitter are applied per-band rather than globally, which is
     the multispectral analogue of brightness jitter: it stands in for
     per-band radiometric calibration drift and varying atmospheric path
     radiance, the two things that actually shift reflectance between scenes.
+
+    Randomness is drawn from a per-item RNG, not one shared generator
+    ─────────────────────────────────────────────────────────────────
+    A single `random.Random(seed)` stored on the dataset is correct with
+    `num_workers=0` and silently wrong above it. Workers are forked, so each
+    one inherits an identical copy of that generator's state; with
+    non-persistent workers they are re-forked from the same parent state every
+    epoch, and the entire run then replays one epoch's worth of augmentation
+    over and over. That is invisible locally (this repo's default is
+    `--workers 0`) and bites only on the multi-worker GPU run, which is the
+    run that can least afford it.
+
+    Seeding per `(seed, epoch, worker, index, draw)` instead makes the stream
+    depend on nothing that fork can duplicate, and keeps it reproducible.
     """
 
-    def __init__(self, base, augment: bool = True, seed: int = 0):
+    def __init__(self, base, augment: bool = True, seed: int = 0,
+                 scale_jitter: tuple[float, float] = (0.65, 1.6),
+                 min_visible: float = 0.35, min_px: int = 6):
         self.base = base
         self.augment = augment
-        self.rng = random.Random(seed)
+        self.seed = seed
+        self.epoch = 0
+        self.scale_jitter = scale_jitter
+        self.min_visible = min_visible
+        self.min_px = min_px
+        self._draws = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Advance the augmentation stream. Only reaches non-persistent workers.
+
+        With `persistent_workers=True` a worker never re-reads this attribute,
+        which is why the per-item seed also mixes in `self._draws` — a counter
+        private to each worker process that keeps climbing across epochs
+        whether or not the epoch number ever gets through.
+        """
+        self.epoch = int(epoch)
 
     def __len__(self) -> int:
         return len(self.base)
+
+    def _rng(self, idx: int) -> random.Random:
+        info = torch.utils.data.get_worker_info()
+        wid = info.id if info is not None else 0
+        self._draws += 1
+        key = self.seed
+        for part in (self.epoch, wid, idx, self._draws):
+            key = key * 8191 + part
+        return random.Random(key)
+
+    def _scale_crop(self, img, labels, rng):
+        """Random zoom in (crop) or zoom out (pad), then resize back to the tile size.
+
+        Boxes are clipped to the new frame and dropped when the crop leaves
+        less than `min_visible` of their area, which is the same rule
+        `data/dota_prep.py` applies when tiling. Augmentation must not be able
+        to manufacture a label from a sliver that tiling would have discarded.
+        """
+        _, H, W = img.shape
+        if H != W:                       # the box maths below assumes square tiles
+            return img, labels
+
+        lo, hi = self.scale_jitter
+        c = int(round(H / rng.uniform(lo, hi)))
+        c = max(32, min(c, H * 3))
+        if c == H:
+            return img, labels
+
+        if c < H:                        # zoom in: take a c x c window
+            x0, y0 = rng.randint(0, W - c), rng.randint(0, H - c)
+            frame = img[:, y0:y0 + c, x0:x0 + c]
+            off_x, off_y = -x0, -y0
+        else:                            # zoom out: paste onto a larger canvas
+            # Filled with the per-band mean rather than zero: zero is a valid
+            # reflectance (deep water) and a hard black border would teach the
+            # detector an edge that no real tile boundary has.
+            frame = img.mean(dim=(1, 2), keepdim=True).repeat(1, c, c)
+            x0, y0 = rng.randint(0, c - W), rng.randint(0, c - H)
+            frame[:, y0:y0 + H, x0:x0 + W] = img
+            off_x, off_y = x0, y0
+
+        out = torch.nn.functional.interpolate(
+            frame[None].float(), size=(H, W), mode="bilinear", align_corners=False
+        )[0]
+
+        if not len(labels):
+            return out, labels
+
+        cx = labels[:, 1] * W + off_x
+        cy = labels[:, 2] * H + off_y
+        bw = labels[:, 3] * W
+        bh = labels[:, 4] * H
+
+        x1, x2 = (cx - bw / 2).clamp(0, c), (cx + bw / 2).clamp(0, c)
+        y1, y2 = (cy - bh / 2).clamp(0, c), (cy + bh / 2).clamp(0, c)
+
+        visible = ((x2 - x1) * (y2 - y1)) / (bw * bh).clamp(min=1e-6)
+        rescale = H / c
+        keep = (
+            (visible >= self.min_visible)
+            & ((x2 - x1) * rescale >= self.min_px)
+            & ((y2 - y1) * rescale >= self.min_px)
+        )
+
+        kept = labels[keep].clone()
+        if len(kept):
+            kx1, kx2, ky1, ky2 = x1[keep], x2[keep], y1[keep], y2[keep]
+            kept[:, 1] = (kx1 + kx2) / 2 / c
+            kept[:, 2] = (ky1 + ky2) / 2 / c
+            kept[:, 3] = (kx2 - kx1) / c
+            kept[:, 4] = (ky2 - ky1) / c
+        return out, kept
 
     def __getitem__(self, idx: int):
         img, labels = self.base[idx]          # (6,H,W) float32, (N,5) [cls,cx,cy,w,h]
         if not self.augment:
             return img, labels
 
+        rng = self._rng(idx)
         labels = labels.clone()
 
-        if self.rng.random() < 0.5:           # horizontal flip
+        if rng.random() < 0.8:                # scale jitter (zoom in or out)
+            img, labels = self._scale_crop(img, labels, rng)
+
+        if rng.random() < 0.5:                # horizontal flip
             img = torch.flip(img, dims=[2])
             if len(labels):
                 labels[:, 1] = 1.0 - labels[:, 1]
 
-        if self.rng.random() < 0.5:           # vertical flip
+        if rng.random() < 0.5:                # vertical flip
             img = torch.flip(img, dims=[1])
             if len(labels):
                 labels[:, 2] = 1.0 - labels[:, 2]
 
-        if self.rng.random() < 0.5:           # 90° rotation (tiles are square)
+        if rng.random() < 0.5:                # 90 degree rotation (tiles are square)
             img = torch.rot90(img, k=1, dims=[1, 2])
             if len(labels):
                 cx, cy = labels[:, 1].clone(), labels[:, 2].clone()
@@ -115,12 +229,38 @@ class AugmentedTiles(torch.utils.data.Dataset):
                 labels[:, 1], labels[:, 2] = cy, 1.0 - cx
                 labels[:, 3], labels[:, 4] = bh, bw
 
-        if self.rng.random() < 0.7:           # per-band gain/offset jitter
-            gain   = torch.empty(6, 1, 1).uniform_(0.90, 1.10)
-            offset = torch.empty(6, 1, 1).uniform_(-0.04, 0.04)
+        if rng.random() < 0.7:                # per-band gain/offset jitter
+            # Drawn from the same per-item RNG as everything above, not from
+            # torch's global generator: under `persistent_workers` torch's
+            # per-worker seed is set once when the iterator is built and never
+            # re-drawn, which would reintroduce the repeat-every-epoch problem
+            # for exactly this one transform.
+            gain   = torch.tensor([[[rng.uniform(0.90, 1.10)]] for _ in range(6)])
+            offset = torch.tensor([[[rng.uniform(-0.04, 0.04)]] for _ in range(6)])
             img = (img * gain + offset).clamp_(0.0, 1.0)
 
-        return img, labels
+        return img, labels.contiguous()
+
+
+def worker_init(worker_id: int) -> None:
+    """Per-worker setup for the training and validation loaders.
+
+    Only reseeding. It is tempting to also call `cv2.setNumThreads(0)` here on
+    the theory that four worker processes each opening an OpenCV thread pool
+    will oversubscribe the four vCPUs a Kaggle T4 session has. Measured on a
+    4-core box, that theory is wrong in every configuration:
+
+        workers   cv2 threads on   setNumThreads(0)
+              1      7.8 tiles/s        7.2 tiles/s
+              2     12.6 tiles/s       12.2 tiles/s
+              4     15.9 tiles/s       11.5 tiles/s
+
+    Disabling OpenCV's threads costs 28% at the worker count this run uses, so
+    it is left alone. Notebook cell 4a re-measures this on the actual machine.
+    """
+    seed = torch.initial_seed() % (2 ** 32)
+    np.random.seed(seed)
+    random.seed(seed)
 
 
 def yolo_collate(batch):
@@ -197,6 +337,55 @@ def set_trainable(model, freeze_backbone: bool) -> tuple[int, int]:
     return n_train, sum(1 for _ in model.parameters())
 
 
+class ModelEMA:
+    """Exponential moving average of the model weights.
+
+    The averaged weights, not the live ones, are what gets validated and
+    saved. The live weights at the end of an epoch sit wherever the last few
+    batches happened to push them; the average sits nearer the middle of the
+    basin, and for a detector this size that is routinely worth a point or two
+    of mAP for no extra training time.
+
+    The decay is ramped in rather than applied flat. At step 1 a 0.9998
+    average is still almost entirely the freshly initialised stem and head, so
+    a flat decay would make the first several epochs of validation measure
+    noise and hand checkpoint selection to whichever epoch happened to be
+    scored once the average finally caught up.
+    """
+
+    def __init__(self, model, decay: float = 0.9998, ramp: int = 2000):
+        self.ema = copy.deepcopy(model).eval()
+        for p in self.ema.parameters():
+            p.requires_grad_(False)
+        self.decay, self.ramp, self.updates = decay, ramp, 0
+
+    @torch.no_grad()
+    def update(self, model) -> None:
+        self.updates += 1
+        d = self.decay * (1.0 - math.exp(-self.updates / self.ramp))
+        msd = model.state_dict()
+        for k, v in self.ema.state_dict().items():
+            if v.dtype.is_floating_point:
+                v.mul_(d).add_(msd[k].detach(), alpha=1.0 - d)
+            else:
+                # Integer buffers (BatchNorm's num_batches_tracked) cannot be
+                # averaged; copying keeps them consistent with the live model.
+                v.copy_(msd[k])
+
+
+def make_scaler(enabled: bool):
+    """AMP gradient scaler, across the torch versions this repo supports.
+
+    `torch.amp.GradScaler("cuda", ...)` is the current spelling; the
+    `torch.cuda.amp` one is deprecated in torch >= 2.4 but is the only form
+    that exists below it, and requirements.txt allows >= 2.1.
+    """
+    try:
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
 def build_optimizer(model, lr: float, weight_decay: float = 5e-4):
     """AdamW with no weight decay on norms and biases.
 
@@ -219,11 +408,13 @@ def build_optimizer(model, lr: float, weight_decay: float = 5e-4):
 # ── Train / validate ──────────────────────────────────────────────────────────
 
 def run_epoch(model, loader, criterion, optimizer, device, scheduler=None,
-              warmup_iters: int = 0, base_lr: float = 1e-3, global_step: int = 0):
+              warmup_iters: int = 0, base_lr: float = 1e-3, global_step: int = 0,
+              scaler=None, ema=None):
     """One training pass. Returns (mean_total_loss, component_means, step)."""
     model.train()
     totals = np.zeros(3, dtype=np.float64)
     total_loss, n_batches = 0.0, 0
+    amp = scaler is not None and scaler.is_enabled()
 
     for batch in loader:
         # Linear LR warmup. The stem and head are freshly initialised, so the
@@ -235,17 +426,32 @@ def run_epoch(model, loader, criterion, optimizer, device, scheduler=None,
                 g["lr"] = base_lr * warm
 
         imgs = batch["img"].to(device, non_blocking=True)
-        preds = model(imgs)
 
-        loss, parts = criterion(preds, batch)
+        with torch.autocast(device_type="cuda", enabled=amp):
+            preds = model(imgs)
+            loss, parts = criterion(preds, batch)
+
         # `v8DetectionLoss` returns the batch-summed loss; normalise so the
         # reported number is comparable across batch sizes.
         loss = loss.sum() / imgs.shape[0]
 
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-        optimizer.step()
+        if amp:
+            scaler.scale(loss).backward()
+            # Unscale before clipping, or the clip threshold is applied to
+            # gradients that are still multiplied by the loss scale and does
+            # nothing at all.
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            optimizer.step()
+
+        if ema is not None:
+            ema.update(model)
 
         total_loss += float(loss.detach())
         totals += np.array([float(v) for v in parts.values()])
@@ -259,24 +465,79 @@ def run_epoch(model, loader, criterion, optimizer, device, scheduler=None,
     return total_loss / n, totals / n, global_step
 
 
-def validate(model, images_dir, labels_dir, device, conf: float, iou: float,
-             limit: int | None = None) -> dict:
-    """Score the live model with `model/evaluate_detector.py`'s metric code."""
-    from model.evaluate_detector import evaluate
+def val_collate(batch):
+    """Keep tiles and labels as parallel lists; no target flattening.
+
+    Must be a module-level function rather than a lambda: `spawn`-based
+    dataloader workers pickle the collate, and macOS defaults to spawn even
+    though Linux (and so Kaggle) defaults to fork.
+    """
+    return [b[0] for b in batch], [b[1] for b in batch]
+
+
+def build_val_loader(images_dir, labels_dir, batch: int, workers: int,
+                     limit: int | None, pin: bool):
+    """Loader over the validation split, yielding tiles and their labels.
+
+    Validation used to read and score one tile at a time on the main process.
+    The forward pass is the cheap part of that: reading a tile and deriving its
+    six bands costs tens of milliseconds of single-threaded OpenCV, so at a
+    validation size large enough to select a checkpoint on, the GPU spent most
+    of each epoch's validation idle. Reading through the same worker pool the
+    training loader uses, and batching the forward pass, moves that cost off
+    the critical path.
+    """
+    from ground.dataset_6ch import MultiSpectralDataset
+
+    ds = MultiSpectralDataset(images_dir, labels_dir, INPUT_SIZE)
+    if limit is not None and limit < len(ds):
+        ds = torch.utils.data.Subset(ds, range(limit))
+
+    return torch.utils.data.DataLoader(
+        ds, batch_size=batch, shuffle=False, num_workers=workers,
+        collate_fn=val_collate,
+        worker_init_fn=worker_init if workers else None,
+        persistent_workers=workers > 0,
+        pin_memory=pin,
+    )
+
+
+def validate(model, loader, device, conf: float, iou: float) -> dict:
+    """Score the live model through `model/evaluate_detector.py`'s metric code.
+
+    Boxes are produced by the same `postprocess` the flight engine uses, and
+    aggregated by the same `score_predictions` the CLI evaluator uses, so an
+    in-loop mAP and a command-line mAP mean the same thing.
+    """
+    from model.evaluate_detector import load_labels, score_predictions
 
     model.eval()
 
-    class _LiveBackend:
-        def __call__(self, tile: np.ndarray) -> np.ndarray:
-            x = torch.from_numpy(tile.transpose(2, 0, 1)[None].astype(np.float32)).to(device)
+    def produce():
+        for imgs, labels in loader:
+            x = torch.stack(imgs).to(device, non_blocking=True)
             with torch.no_grad():
                 out = model(x)
             if isinstance(out, (list, tuple)):
                 out = out[0]
-            return out.cpu().numpy()
+            raw = out.float().cpu().numpy()
 
-    return evaluate(_LiveBackend(), images_dir, labels_dir,
-                    conf_report=conf, iou_nms=iou, limit=limit)
+            for i, lab in enumerate(labels):
+                # `score_predictions` wants pixel-space xyxy ground truth, the
+                # same layout `load_labels` parses off disk; the loader hands
+                # back the normalised cxcywh form the trainer uses.
+                if len(lab):
+                    gts = np.zeros((len(lab), 5), dtype=np.float32)
+                    gts[:, 0] = lab[:, 0]
+                    gts[:, 1] = (lab[:, 1] - lab[:, 3] / 2) * INPUT_SIZE
+                    gts[:, 2] = (lab[:, 2] - lab[:, 4] / 2) * INPUT_SIZE
+                    gts[:, 3] = (lab[:, 1] + lab[:, 3] / 2) * INPUT_SIZE
+                    gts[:, 4] = (lab[:, 2] + lab[:, 4] / 2) * INPUT_SIZE
+                else:
+                    gts = np.zeros((0, 5), dtype=np.float32)
+                yield raw[i : i + 1], gts
+
+    return score_predictions(produce(), conf_report=conf, iou_nms=iou)
 
 
 def save_checkpoint(model, path: Path, nc: int, epoch: int, fitness: float) -> None:
@@ -319,7 +580,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=1e-3, help="Phase 1 LR")
     p.add_argument("--lr-phase2", type=float, default=3e-4)
     p.add_argument("--device", default="", help="'' (auto), 'cpu', 'mps', 'cuda'")
-    p.add_argument("--workers", type=int, default=0)
+    p.add_argument("--workers", type=int, default=0,
+                   help="Dataloader workers. Band derivation is the loader's "
+                        "dominant cost, so on a GPU box this wants to be the "
+                        "core count, not 0.")
+    p.add_argument("--prefetch", type=int, default=2,
+                   help="Batches each worker runs ahead (only used when --workers > 0). "
+                        "Costs RAM: a queued batch is batch x 9.8 MB, so 4 workers "
+                        "x 2 batches x 32 tiles is already ~2.5 GB in flight.")
+    p.add_argument("--val-batch", type=int, default=16,
+                   help="Batch size for validation forward passes")
+    p.add_argument("--no-amp", action="store_true",
+                   help="Disable mixed precision (CUDA only; ignored elsewhere)")
+    p.add_argument("--ema-decay", type=float, default=0.9998,
+                   help="Weight-EMA decay; 0 disables the EMA and scores/saves "
+                        "the live weights")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--conf", type=float, default=0.35, help="Reporting confidence threshold")
     p.add_argument("--iou", type=float, default=0.45, help="NMS IoU threshold")
@@ -360,6 +635,10 @@ def main() -> None:
         args.epochs, args.epochs_phase1 = 2, 2
         args.n_train, args.n_val = 24, 8
         args.val_limit = 8
+        # A 2000-step decay ramp never leaves the initialisation behind in a
+        # 4-epoch smoke run, and the EMA weights would score ~0 and make the
+        # smoke test look like a failure.
+        args.ema_decay = min(args.ema_decay, 0.9)
 
     device = pick_device(args.device)
     log.info(f"Device: {device}")
@@ -377,14 +656,44 @@ def main() -> None:
     train_base = MultiSpectralDataset(ds_root / "images" / "train",
                                       ds_root / "labels" / "train", INPUT_SIZE)
     train_ds = AugmentedTiles(train_base, augment=True, seed=args.seed)
+
+    # Deriving six bands from a JPEG is tens of milliseconds of single-threaded
+    # OpenCV per tile, several times what a yolov8n step costs on a T4, so the
+    # loader — not the GPU — sets the pace of this run. These four settings are
+    # what keep the device fed: enough workers to cover the decode, workers that
+    # survive between epochs instead of being re-forked, a prefetch queue deep
+    # enough to absorb a slow tile, and pinned memory so the host-to-device copy
+    # can overlap the next batch.
+    pin = device == "cuda"
+    loader_kwargs = dict(
+        num_workers=args.workers,
+        worker_init_fn=worker_init if args.workers else None,
+        persistent_workers=args.workers > 0,
+        pin_memory=pin,
+    )
+    if args.workers > 0:
+        loader_kwargs["prefetch_factor"] = args.prefetch
+
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers,
+        train_ds, batch_size=args.batch, shuffle=True,
         collate_fn=yolo_collate, drop_last=len(train_ds) > args.batch,
+        **loader_kwargs,
     )
     log.info(f"Train tiles: {len(train_ds)} | batches/epoch: {len(train_loader)}")
 
     val_images = ds_root / "images" / "val"
     val_labels = ds_root / "labels" / "val"
+
+    # Two validation loaders: a capped one for per-epoch checkpoint selection,
+    # and the full split scored once at the end.
+    # Half the workers: the validation pool sits idle through every training
+    # epoch and vice versa, but `persistent_workers` keeps both alive, and each
+    # live worker holds queued batches at 9.8 MB per tile.
+    val_workers = max(1, args.workers // 2) if args.workers else 0
+    val_loader = build_val_loader(val_images, val_labels, args.val_batch,
+                                  val_workers, args.val_limit, pin)
+    full_val_loader = build_val_loader(val_images, val_labels, args.val_batch,
+                                       val_workers, None, pin)
 
     # ── Model + loss ──────────────────────────────────────────────────────────
     model = load_or_create_model(args.weights, args.base, N_CLASSES, device)
@@ -392,7 +701,15 @@ def main() -> None:
     from ultralytics.utils.loss import v8DetectionLoss
     criterion = v8DetectionLoss(model)
 
+    amp_on = device == "cuda" and not args.no_amp
+    scaler = make_scaler(amp_on)
+    log.info(f"Mixed precision: {'on' if amp_on else 'off'}")
+
+    ema = ModelEMA(model, decay=args.ema_decay) if args.ema_decay > 0 else None
+    log.info(f"Weight EMA: {'decay ' + str(args.ema_decay) if ema else 'off'}")
+
     history = []
+    global_epoch = 0
     best_map, best_epoch = -1.0, -1
     out_path = Path(args.out)
     t0 = time.time()
@@ -417,17 +734,30 @@ def main() -> None:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=max(1, n_epochs), eta_min=lr * 0.05
         )
-        warmup_iters = min(len(train_loader) * 2, 200) if phase_name == "phase1" else 0
+        # Both phases warm up, not just the first. Phase 2 unfreezes the whole
+        # backbone onto a fresh optimizer with no moment estimates, at the exact
+        # moment the pretrained features are most disturbable; stepping straight
+        # in at the target LR is how a good phase-1 result gets undone in the
+        # first few dozen batches.
+        warmup_iters = (min(len(train_loader) * 2, 200) if phase_name == "phase1"
+                        else min(len(train_loader), 100))
         step = 0
 
         for epoch in range(1, n_epochs + 1):
+            train_ds.set_epoch(global_epoch)
+            global_epoch += 1
+
             loss, parts, step = run_epoch(
                 model, train_loader, criterion, optimizer, device,
                 scheduler=scheduler, warmup_iters=warmup_iters,
-                base_lr=lr, global_step=step,
+                base_lr=lr, global_step=step, scaler=scaler, ema=ema,
             )
-            m = validate(model, val_images, val_labels, device, args.conf, args.iou,
-                         limit=args.val_limit)
+            # The averaged weights are what will ship, so they are what gets
+            # scored and selected on. Validating the live weights and saving the
+            # averaged ones would select an epoch on a model that is not the one
+            # written to disk.
+            scored = ema.ema if ema is not None else model
+            m = validate(scored, val_loader, device, args.conf, args.iou)
 
             log.info(
                 f"{phase_name} e{epoch:>3}/{n_epochs} | loss {loss:7.3f} "
@@ -450,7 +780,7 @@ def main() -> None:
             fitness = m["map50_95"] + 1e-4 * m["map50"]
             if fitness > best_map:
                 best_map, best_epoch = fitness, len(history)
-                save_checkpoint(model, out_path, N_CLASSES, len(history), fitness)
+                save_checkpoint(scored, out_path, N_CLASSES, len(history), fitness)
                 log.info(f"  ↳ new best (mAP50-95 {m['map50_95']:.4f}) → {out_path}")
 
     elapsed = time.time() - t0
@@ -468,7 +798,7 @@ def main() -> None:
     from ultralytics import YOLO
 
     best_model = YOLO(str(out_path)).model.to(device).eval()
-    final = validate(best_model, val_images, val_labels, device, args.conf, args.iou)
+    final = validate(best_model, full_val_loader, device, args.conf, args.iou)
     log.info(
         f"Full val split ({final['tiles']} tiles): "
         f"mAP50 {final['map50']:.4f} mAP50-95 {final['map50_95']:.4f}"
@@ -479,6 +809,9 @@ def main() -> None:
         "epochs_total": len(history),
         "train_tiles": len(train_ds),
         "device": device,
+        "amp": amp_on,
+        "ema_decay": args.ema_decay if ema else 0.0,
+        "workers": args.workers,
         "elapsed_s": round(elapsed, 1),
         "checkpoint": str(out_path),
         "history": history,

@@ -195,36 +195,35 @@ class OnnxBackend:
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-def evaluate(
-    backend,
-    images_dir: str | Path,
-    labels_dir: str | Path,
+def score_predictions(
+    pairs,
     conf_report: float = CONF_THRESHOLD,
     iou_nms: float = IOU_THRESHOLD,
-    limit: int | None = None,
 ) -> dict:
-    """Score a backend over a directory of tiles and YOLO label files.
+    """Aggregate detection metrics from an iterable of `(raw_output, gts)` pairs.
 
-    Tiles may be `.npy` (pre-materialised 6-band) or RGB with bands derived
-    on read; `data/tiles.py` hides the difference.
+    This is the whole metric, separated from the question of where the raw
+    model output came from. `evaluate()` below feeds it one tile at a time
+    through a backend, which is what the CLI wants; the training loop feeds it
+    the outputs of a batched GPU forward pass, which is the only way the
+    per-epoch validation is affordable at a useful number of tiles.
+
+    Both callers therefore score through the identical decision path —
+    `inference.engine.postprocess`, the same NMS, the same class map — so an
+    in-loop number and a CLI number are directly comparable. Duplicating the
+    aggregation for the batched path is exactly how those two drift apart.
+
+    Args:
+        pairs: iterable of (raw model output, (N,5) ground-truth array)
     """
-    images_dir, labels_dir = Path(images_dir), Path(labels_dir)
-    tiles = list_tiles(images_dir)
-    if limit:
-        tiles = tiles[:limit]
-    if not tiles:
-        raise FileNotFoundError(f"No tiles in {images_dir}")
-
     n_cls = len(CLASS_NAMES)
     per_class = {c: {"dets": [], "conf": [], "n_gt": 0} for c in range(n_cls)}
 
     n_above_thresh = 0
+    n_tiles = 0
 
-    for tp_path in tiles:
-        tile = read_tile(tp_path)
-        gts  = load_labels(labels_dir / (tp_path.stem + ".txt"))
-
-        raw = backend(tile)
+    for raw, gts in pairs:
+        n_tiles += 1
         dets = postprocess(raw, conf_thresh=AP_CONF_FLOOR, iou_thresh=iou_nms)
         n_above_thresh += sum(1 for d in dets if d["conf"] >= conf_report)
 
@@ -243,7 +242,7 @@ def evaluate(
             per_class[c]["conf"].append(det_c[:, 4])
 
     # ── Aggregate per class, per IoU threshold ────────────────────────────────
-    results = {"classes": {}, "tiles": len(tiles)}
+    results = {"classes": {}, "tiles": n_tiles}
     ap50, ap5095 = [], []
 
     for c in range(n_cls):
@@ -287,6 +286,34 @@ def evaluate(
     results["conf_threshold"] = conf_report
     results["classes_scored"] = len(ap50)
     return results
+
+
+def evaluate(
+    backend,
+    images_dir: str | Path,
+    labels_dir: str | Path,
+    conf_report: float = CONF_THRESHOLD,
+    iou_nms: float = IOU_THRESHOLD,
+    limit: int | None = None,
+) -> dict:
+    """Score a backend over a directory of tiles and YOLO label files.
+
+    Tiles may be `.npy` (pre-materialised 6-band) or RGB with bands derived
+    on read; `data/tiles.py` hides the difference.
+    """
+    images_dir, labels_dir = Path(images_dir), Path(labels_dir)
+    tiles = list_tiles(images_dir)
+    if limit:
+        tiles = tiles[:limit]
+    if not tiles:
+        raise FileNotFoundError(f"No tiles in {images_dir}")
+
+    def produce():
+        for tp_path in tiles:
+            yield (backend(read_tile(tp_path)),
+                   load_labels(labels_dir / (tp_path.stem + ".txt")))
+
+    return score_predictions(produce(), conf_report=conf_report, iou_nms=iou_nms)
 
 
 def print_report(r: dict, title: str) -> None:
