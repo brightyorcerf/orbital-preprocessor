@@ -192,7 +192,7 @@ def proto_to_payload(brief: SceneBrief):
 def serialize_to_binary(payload, out_path: Optional[str] = None) -> bytes:
     """
     Serialize OSPPayload → Protobuf binary bytes.
-    Optionally write to .bin file (OrbitLab output mount: /output/{scene_id}.bin).
+    Optionally write to .bin file (platform output mount: /output/{scene_id}.bin).
     """
     brief  = payload_to_proto(payload)
     binary = brief.SerializeToString()

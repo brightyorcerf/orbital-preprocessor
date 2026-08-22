@@ -179,21 +179,21 @@ class PolicyEngine:
             return True, f"High-confidence {atype} in {risk_zone}", 1
 
         if history_count >= 3:
-            return True, f"Recurring anomaly — {history_count} prior observations", 1
+            return True, f"Recurring anomaly: {history_count} prior observations", 1
 
         # Priority 2 triggers (within 24h)
         if conf >= 0.70 and risk_zone:
             return True, f"Medium-high confidence {atype} in {risk_zone}", 2
 
         if history_count >= 2:
-            return True, f"Repeated anomaly — {history_count} prior observations", 2
+            return True, f"Repeated anomaly: {history_count} prior observations", 2
 
         if conf >= 0.80 and atype in ("airplane", "ship"):
             return True, f"High confidence {atype} requires verification", 2
 
         # Priority 3 (next scheduled pass)
         if conf < 0.55 and risk_zone:
-            return True, f"Low-confidence detection in {risk_zone} — verify", 3
+            return True, f"Low-confidence detection in {risk_zone}: verify", 3
 
         return False, "No OVV trigger conditions met", 5
 
@@ -304,7 +304,7 @@ class MissionController:
         if final_alert in ("ORANGE", "RED"):
             actions.append(f"Alert dispatched: {final_alert}")
         if not actions:
-            actions.append("No action required — monitoring continued.")
+            actions.append("No action required: monitoring continued.")
 
         decision = AgentDecision(
             alert_level    = final_alert,
@@ -421,7 +421,7 @@ class MissionController:
             ),
             "scene_narrative": f"{len(anomalies)} detection(s) flagged by onboard model.",
             "reasoning_trace": [
-                "LLM analyst unavailable — deterministic policy rules applied.",
+                "LLM analyst unavailable: deterministic policy rules applied.",
                 f"Policy alert computed: {policy_alert}",
             ],
             "anomaly_assessments": [
@@ -464,7 +464,7 @@ class MissionController:
 
         log_lines = [
             separator,
-            f"  OSP MISSION LOG — {scene_id}",
+            f"  OSP MISSION LOG: {scene_id}",
             f"  {timestamp_utc}",
             separator,
             "",

@@ -1,0 +1,24 @@
+# requirements-ci.txt
+# ───────────────────
+# What the three test suites need, and nothing else.
+#
+# requirements.txt is the documented install path for actually using OSP, and
+# it pulls torch, ultralytics, faiss and streamlit: roughly 2 GB and several
+# minutes. None of that is reachable from the tests CI runs. Training and
+# export need it; asserting that a contact window is 10.2 minutes long does not.
+#
+# The tests that do need a trained artifact (T13's accuracy floor, the SEU
+# injection tests) skip when it is absent, which is exactly what they do on a
+# fresh clone. That is the intended CI result, and it is why the badge means
+# "the deterministic layers hold", not "the detector is accurate". The second
+# claim needs artifacts a repository should not carry.
+
+numpy>=1.24,<2.0
+opencv-python-headless>=4.8,<5.0   # cv2, imported by inference/engine.py
+onnxruntime>=1.17,<2.0
+onnx>=1.16,<2.0
+protobuf>=5.29,<6.0                # inference/osp_pb2.py gencode floor
+sgp4>=2.23,<3.0                    # reference SGP4, the propagator under test
+skyfield>=1.45,<2.0                # independent oracle for orbital/frames.py
+plotly>=5.20,<7.0                  # ground/globe.py, cross-checked by test_orbital
+pytest>=8.0,<10.0

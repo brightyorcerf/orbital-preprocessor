@@ -1,12 +1,16 @@
 # Orbital Scene Preprocessor
 
-On-board multispectral perception with a deterministic safety envelope around a generative reasoning layer.
+A spacecraft decides what to downlink on its next contact, under real orbital and link constraints, by deterministic rule. A language model helps explain the result and is architecturally unable to change it.
 
 [Open the live command centre](https://osp-command-centre.streamlit.app/)
 
-`0.99 mAP@0.5` · `3.69 MB INT8 model` · `62 ms per tile` · `226-byte briefs` · `43,497:1`
+[![tests](https://github.com/brightyorcerf/orbital-preprocessor/actions/workflows/tests.yml/badge.svg)](https://github.com/brightyorcerf/orbital-preprocessor/actions/workflows/tests.yml)
 
-`Real TLEs` · `SGP4-propagated contact windows` · `101 contacts of raw imagery vs 1 of briefs`
+`SGP4-propagated contact windows` · `10.2 min pass, computed not assumed` · `101 contacts of raw imagery vs 1 of briefs` · `19,863x fewer bytes`
+
+`LLM in control loop: False, enforced by the interface` · `frames validated to 38 m against Skyfield` · `every declared fallback has a test that fires it`
+
+`3.69 MB INT8 detector` · `62 ms per tile` · `226-byte briefs` · `synthetic pixels, and the repo says so`
 
 ![OSP command centre](img.jpg)
 
@@ -78,7 +82,7 @@ Left of the line runs on a compute budget. Right of the line does not.
 
 ---
 
-## Four things worth your attention
+## Five things worth your attention
 
 ### 1. The orbit is computed, not drawn
 
@@ -140,7 +144,51 @@ The detection head is rebuilt from 80 COCO classes down to 4 (`ship`, `airplane`
 
 Why bother with infrared at all: B11/B12 short-wave infrared separates man-made hull material from seawater even through light haze, in conditions where the visible bands wash out to uniform grey.
 
-### 4. Every number in this file regenerates from a script
+That is the argument. The measurement does not support it, and it is worth saying so directly. `resilience/degradation.py` kills each band in turn and rescores: dropping B11 costs 0.001 mAP, dropping B12 costs 0.011, and dropping both costs **nothing at all** (0.996 to 0.996). A control that blanks all six bands scores 0.000, so the harness is definitely biting.
+
+The honest reading is not that infrared is useless. It is that this corpus cannot answer the question. `data/synth_demo.py` paints objects into all six bands with high contrast, so every band independently carries enough signal to solve the task, and the SWIR argument is untested rather than disproved. It is one more thing real imagery would settle, and one more reason the next step is DOTA retraining rather than another architectural feature.
+
+### 4. The declared safety behaviours are executed, not just declared
+
+`config/platforms.py` says, for the `skyroot-oam` profile:
+
+```python
+watchdog_timeout_s        = 5.0
+max_inference_latency_ms  = 400.0
+fallback_on_model_failure = "hold_last_known_good_and_flag_ground"
+```
+
+For most of this project's life, none of those were reachable by any code path. That is a worse state than having no declaration at all: it reads as a safety property and behaves as a comment. `resilience/` closes it.
+
+`inference/engine.py` no longer raises. `run_tile` is guarded: any exception out of the perception path, and any pass that overruns the watchdog, is converted into the profile's declared fallback brief, flagged `degraded` so the ground cannot mistake it for a fresh observation. Each declared fallback string resolves to a real handler, and **an engine refuses to start against a profile whose declared fallback has no implementation.** A profile cannot promise a behaviour the code cannot perform.
+
+`test_resilience.py` then forces each failure on purpose:
+
+| Fault | What the system does | Test |
+| :--- | :--- | :--- |
+| Model crash, execution provider fault | Declared fallback fires, brief flagged `degraded` | `test_a_model_crash_produces_the_declared_fallback` |
+| Perception overruns the watchdog | Same fallback, fault recorded as `WatchdogExpiry` | `test_a_stall_trips_the_watchdog_and_fires_the_fallback` |
+| Over the latency budget but returning | Reported; the brief still stands | `test_a_latency_budget_breach_is_reported` |
+| Failure on the first tile, nothing to hold | Degrades to an empty flagged brief, invents nothing | `test_hold_with_no_history_degrades_further_rather_than_inventing` |
+| Truncated or malformed brief | Quarantined with a reason, contact still planned | `test_structurally_destructive_corruption_is_quarantined` |
+| Bit flips in INT8 weights | **Nothing. Nothing at all.** | `test_an_upset_model_still_loads_and_runs` |
+
+`test_every_assurance_field_is_exercised` is the one that keeps this honest: it fails if a field is added to `AssuranceProfile` without a test that makes it happen. The same idea as `test_scheduler_interface_exposes_no_model_hook`, pointed at failure behaviour instead of at the authority boundary.
+
+Two results are worth more than the machinery.
+
+**Bit flips are invisible.** A single-event upset is the characteristic failure of flight compute, and it lands in INT8 weights as silent numerical corruption. Flip a quarter of a million bits and the graph still loads, every tensor still has the right shape, inference still returns, and nothing anywhere reports a problem. Accuracy holds to about 0.1% of weight memory and then collapses, and **as it collapses the model emits more detections, not fewer**: 119 at baseline, 6,573 at the far end. The failure mode is not silence, it is confident nonsense. This is the one fault in the table the declared fallback cannot catch, because there is no error to catch. It is the same argument this repo makes about language models, and it turns out to apply to the detector too.
+
+**A single flipped byte in a brief is often undetectable.** About half the time it lands somewhere that still parses and still type-checks, and ingest returns a brief that is well-formed and wrong. Structural validation cannot fix this; an integrity check on the wire would, and OSP does not have one. `test_a_single_flipped_byte_can_survive_ingest_undetected` pins the gap rather than letting the quarantine tests imply a completeness they do not deliver.
+
+What ingest does guarantee is narrower and worth stating precisely: it never raises, and it never repairs. A truncated brief whose anomaly list did not survive is rejected, not coerced to "zero detections", because that is not a missing observation, it is a false one, and the scheduler would spend real bytes downlinking it.
+
+```bash
+python resilience/degradation.py          # regenerates the curve
+python -m pytest test_resilience.py -v
+```
+
+### 5. Every number in this file regenerates from a script
 
 No figure here was typed in by hand. Each one has a command that reproduces it, and the repo distinguishes three kinds of claim:
 
@@ -204,13 +252,51 @@ python model/benchmark_quantization.py --platform skyroot-oam
 
 Protobuf over JSON buys 2.4x on identical content, largely by sending a single enum byte where JSON spells out `"type": "storage-tank"` in full.
 
+### Fault tolerance
+
+Single-event upsets injected uniformly into the 25,026,816 bits of quantised weight memory, scored over 24 held-out tiles, 3 random draws per point.
+
+| Weight bits flipped | Share of weight memory | mAP@0.5 | Detections emitted |
+| ---: | ---: | ---: | ---: |
+| 0 | 0% | 0.996 | 119 |
+| 8,192 | 0.03% | 0.989 | 119 |
+| 32,768 | 0.13% | 0.981 | 116 |
+| 65,536 | 0.26% | 0.617 | 98 |
+| 131,072 | 0.52% | 0.259 | 317 |
+| 262,144 | 1.05% | 0.003 | 754 |
+| 1,048,576 | 4.19% | 0.000 | 6,573 |
+
+The detection count is the column to read. Past the knee the model does not go quiet, it goes loud: 55x more detections than baseline, essentially all of them wrong, with no error raised anywhere in the stack.
+
+This is a conditional measurement, not a radiation model. It says what survives given N flips and nothing whatsoever about how often N flips occur.
+
+Band dropout, same corpus:
+
+| Band dropped | mAP@0.5 |
+| :--- | ---: |
+| none | 0.996 |
+| B11 | 0.996 |
+| B12 | 0.985 |
+| B11 + B12 | 0.996 |
+| all six *(control)* | 0.000 |
+
+```bash
+python resilience/degradation.py
+```
+
 ---
 
 ## Evaluation
 
-Three suites, because three very different things can be wrong.
+Four suites, because four very different things can be wrong.
+
+89 tests locally. CI runs 81 of them and skips 8: the accuracy floor, the stem-swap check and the SEU injection tests all need a trained artifact or torch, neither of which a repository should carry. So the badge means *the deterministic layers hold*, not *the detector is accurate*. The second claim is made in Results, from a local run, and labelled as such.
 
 `test_pipeline.py`: 13 tests over the engineering path: tensor contracts, geo-projection, protobuf round-trip, compression targets, memory budget, and an accuracy floor on the trained detector. That last one exists because an artifact that exports cleanly, quantizes cleanly and benchmarks cleanly *while detecting nothing* passes every other test in the file.
+
+This file is both a standalone runner and a pytest module, and for most of its life only the first half worked. Its decorator caught and reported failures rather than raising them, so under `pytest` every test in it reported PASS no matter what it asserted, including a deliberately failing probe. The outcome is now re-raised when pytest is driving. Worth stating plainly because it means the green result below is a newer claim than the tests are.
+
+`test_resilience.py`: 33 tests over the failure behaviours. Fault injection into INT8 weights, dead spectral bands, watchdog overruns, hard model failure and corrupted briefs, plus a coverage test that fails if `AssuranceProfile` grows a field with no test that exercises it. The suite was checked by mutation, not just by running it: disabling the watchdog comparison fails two tests, and letting a degraded brief become the last-known-good fails a third.
 
 `test_orbital.py`: 43 tests over the orbital layer. Grouped by what they defend: TLE parsing conventions (an off-by-one on day-of-year shifts every prediction 24 hours while still producing a valid datetime), frame conversions against Skyfield, pass geometry, the scheduling policy, and the authority boundary. Four of them pin the ground track to real orbital mechanics rather than to a plausible drawing.
 
@@ -304,6 +390,15 @@ pip install skyfield                   # needed for the independent-oracle test
 `GEMINI_API_KEY` is needed only for the reasoning layer. Everything upstream, perception, quantization, serialization, the policy engine, runs without any key or network access.
 
 > Training defaults to CPU deliberately. On Apple's MPS backend, the identical run that reaches `cls_loss 0.29 / mAP50 0.99` on CPU diverges to `cls_loss 6.0 / mAP50 0.02` with the same seed and the same data. That's a numerical bug, not a speed trade-off.
+
+---
+
+Fault injection and the degradation curve:
+
+```bash
+python resilience/degradation.py          # SEU sweep + band dropout, ~4 min CPU
+python -m pytest test_resilience.py -v    # the failure behaviours themselves
+```
 
 ---
 
@@ -429,7 +524,10 @@ Stated plainly so the scope isn't mistaken for a claim:
 - Not validated on real imagery. Training and evaluation are entirely synthetic. Retraining on real Sentinel-2 scenes with real annotations is the next piece of work, not a finished one.
 - Not a Skyroot specification. The `skyroot-oam` profile is a `DERIVED` envelope for a launch-vehicle upper-stage compute class, sized an order of magnitude below `moi-1a` so the INT8 and compression work has to genuinely matter. It is not insider knowledge of anyone's hardware and does not claim to be.
 - No real-time AIS fusion, no terrestrial vessel-database integration.
-- No radiation-hardening certification, no RF regulatory compliance.
+- No radiation-hardening certification, no RF regulatory compliance. The SEU work in `resilience/` is a conditional measurement of what survives N bit flips, not a radiation model: it says nothing about how often N flips occur.
+- No integrity check on the wire. Briefs carry no checksum, and a single flipped byte survives ingest roughly half the time as a well-formed, wrong observation. Measured, not assumed, in `test_a_single_flipped_byte_can_survive_ingest_undetected`.
+- Silent model corruption is not covered by any fallback. The declared fallbacks catch failures the system can *see*. A bit-flipped model raises nothing, so nothing fires; it just returns confident nonsense, and increasingly more of it.
+- The 6-band argument is untested, not proven. Killing B11/B12 costs this model nothing measurable on the synthetic corpus, which paints high contrast into every band. See *Teaching an RGB network to see infrared*.
 - Not a link budget. Downlink capacity is rate x duration with a coarse elevation derating, not a computation from antenna gains and noise figures. See *Tradeoffs*.
 - Not a licensed ground station. The Hyderabad site uses Skyroot's corporate coordinates as a planning reference, with a conservative default elevation mask.
 - Pass predictions inherit TLE age. The committed snapshot is dated and graded in the UI; a stale element set gives indicative timing, not pointing-grade timing.

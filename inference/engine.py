@@ -1,8 +1,15 @@
 """
 inference/engine.py
 ───────────────────
-On-board OSP inference engine.  This is the code that runs inside the
-OrbitLab Docker container on MOI-1A.
+On-board OSP inference engine. This is the code that would run on the
+spacecraft: it turns a 6-band tile into a few hundred bytes of semantic brief,
+inside the compute, latency and link envelope declared by the active platform
+profile in config/platforms.py.
+
+It does not raise. `run_tile` is guarded: any failure in the perception path,
+and any overrun of the profile's watchdog, is converted into that profile's
+declared fallback brief, flagged `degraded`. See FALLBACK_HANDLERS below, and
+`resilience/` for the harness that forces each of those failures on purpose.
 
 Pipeline per tile:
   1. Load 6-band .npy tile (or accept raw ndarray from upstream)
@@ -77,6 +84,16 @@ class OSPPayload:
     model_version: str = "osp-yolov8n-int8-v1"
     compression_ratio: int = 0
 
+    # ── Degradation state ────────────────────────────────────────────────────
+    # Set only when the perception path failed and the platform's declared
+    # fallback produced this brief instead. A nominal brief carries none of
+    # these fields on the wire, so the fallback machinery costs zero bytes in
+    # the case that matters, and a degraded brief is impossible to mistake for
+    # a healthy one on the ground.
+    degraded:        bool = False
+    fallback_action: Optional[str] = None
+    fault:           Optional[str] = None
+
     def to_json(self) -> str:
         d = {
             "scene_id":      self.scene_id,
@@ -85,11 +102,19 @@ class OSPPayload:
             "cloud_cover":   round(self.cloud_cover, 3),
             "anomaly_count": len(self.anomalies),
             "anomalies":     [a.to_dict() for a in self.anomalies],
-            "meta": {
-                "model_version":    self.model_version,
-                "inference_ms":     round(self.inference_ms, 1),
-                "compression_ratio": self.compression_ratio,
-            },
+        }
+        if self.degraded:
+            # Flagging the ground is half of every fallback string in
+            # config/platforms.py. This is that half.
+            d["degraded"] = True
+            d["fallback"] = {
+                "action": self.fallback_action,
+                "fault":  self.fault,
+            }
+        d["meta"] = {
+            "model_version":    self.model_version,
+            "inference_ms":     round(self.inference_ms, 1),
+            "compression_ratio": self.compression_ratio,
         }
         return json.dumps(d, separators=(",", ":"))  # compact — minimise bytes
 
@@ -339,22 +364,169 @@ def estimate_cloud_cover(tile_6ch: np.ndarray) -> float:
     return float(bright_mask.mean())
 
 
+# ── Fault handling: the declared fallback, as executable code ────────────────
+#
+# `config/platforms.py` declares, per platform, what the perception stack does
+# when the model fails:
+#
+#     moi-1a      : emit_empty_brief_with_cloud_estimate
+#     skyroot-oam : hold_last_known_good_and_flag_ground
+#
+# Those were strings in a dataclass with no code path behind them, which is a
+# worse state than having no declaration at all: it reads as a safety property
+# and behaves as a comment. Each string now resolves to a handler in
+# FALLBACK_HANDLERS, and an engine refuses to start against a profile whose
+# declared fallback has no implementation. A profile cannot promise a behaviour
+# this module cannot perform.
+
+
+class WatchdogExpiry(RuntimeError):
+    """
+    Raised when a tile's perception pass overruns the platform's watchdog.
+
+    Honest about what this is: on real flight hardware the watchdog is an
+    external timer that resets the compute, and software does not get to
+    observe its own overrun. Here the overrun is detected in-process, after
+    the fact, and the *recovery* action is the same one the flight system
+    would take on reset: fall back to the declared behaviour and flag ground.
+    What this models faithfully is the recovery path. What it does not model
+    is the reset itself.
+    """
+
+
+def _fallback_empty_brief_with_cloud_estimate(
+    engine: "OSPEngine",
+    scene_id: str,
+    timestamp: str,
+    footprint: dict,
+    tile_6ch: Optional[np.ndarray],
+    fault: str,
+) -> "OSPPayload":
+    """
+    Emit a well-formed brief with no detections, keeping the cloud estimate.
+
+    Cloud cover is a threshold over one band. It costs microseconds and does
+    not touch the model, so it survives exactly the failures that take the
+    detector down. The ground learns the tile was imaged, roughly what the sky
+    looked like, and that perception did not run.
+    """
+    cloud = 0.0
+    if tile_6ch is not None:
+        try:
+            cloud = estimate_cloud_cover(tile_6ch)
+        except Exception:
+            cloud = 0.0
+    return OSPPayload(
+        scene_id        = scene_id,
+        timestamp_utc   = timestamp,
+        tile_footprint  = footprint,
+        cloud_cover     = cloud,
+        anomalies       = [],
+        inference_ms    = 0.0,
+        degraded        = True,
+        fallback_action = "emit_empty_brief_with_cloud_estimate",
+        fault           = fault,
+    )
+
+
+def _fallback_hold_last_known_good_and_flag_ground(
+    engine: "OSPEngine",
+    scene_id: str,
+    timestamp: str,
+    footprint: dict,
+    tile_6ch: Optional[np.ndarray],
+    fault: str,
+) -> "OSPPayload":
+    """
+    Re-assert the last successful detection set, flagged as held.
+
+    The reasoning is specific to a manoeuvring stage. Losing perception for a
+    tile is not an emergency; silently losing the *scene picture* while the
+    vehicle continues to act on it is. Holding the last good result keeps the
+    ground's model of the scene continuous, and the `degraded` flag makes it
+    unmistakably a hold rather than a fresh observation, so nobody downstream
+    can mistake stale detections for new ones.
+
+    With no last-good result to hold (a failure on the first tile of a
+    campaign) this degrades further to an empty flagged brief rather than
+    inventing anything. That case is reported in the fault string.
+    """
+    last = engine.last_known_good
+    if last is None:
+        payload = _fallback_empty_brief_with_cloud_estimate(
+            engine, scene_id, timestamp, footprint, tile_6ch,
+            f"{fault}; no last-known-good available, emitted empty brief instead",
+        )
+        payload.fallback_action = "hold_last_known_good_and_flag_ground"
+        return payload
+
+    return OSPPayload(
+        scene_id        = scene_id,
+        timestamp_utc   = timestamp,
+        tile_footprint  = footprint,
+        cloud_cover     = last.cloud_cover,
+        # Copied, not shared: a held brief must not alias the payload it was
+        # derived from, or editing one would rewrite history in the other.
+        anomalies       = [Anomaly(**vars(a)) for a in last.anomalies],
+        inference_ms    = 0.0,
+        degraded        = True,
+        fallback_action = "hold_last_known_good_and_flag_ground",
+        fault           = f"{fault}; holding detections from {last.scene_id}",
+    )
+
+
+FALLBACK_HANDLERS = {
+    "emit_empty_brief_with_cloud_estimate": _fallback_empty_brief_with_cloud_estimate,
+    "hold_last_known_good_and_flag_ground": _fallback_hold_last_known_good_and_flag_ground,
+}
+
+
 # ── Main inference class ──────────────────────────────────────────────────────
 
 class OSPEngine:
     """
     Stateful inference engine.  Load once, call run_tile() per scene.
-    Thread-safe for single-GPU OrbitLab deployment.
+    Thread-safe for single-accelerator deployment.
     """
 
     def __init__(self, model_path: str, platform: Optional[str] = None):
         from config.platforms import get_profile
 
         self.profile    = get_profile(platform)
+
+        # Resolve the declared fallback before doing anything else. A profile
+        # that names a behaviour this module cannot perform is a configuration
+        # error, and the moment to discover it is at startup on the ground,
+        # not at the moment of the failure it was written to survive.
+        declared = self.profile.assurance.fallback_on_model_failure
+        if declared not in FALLBACK_HANDLERS:
+            raise ValueError(
+                f"Platform profile '{self.profile.key}' declares "
+                f"fallback_on_model_failure='{declared}', which has no handler "
+                f"in FALLBACK_HANDLERS. Available: {sorted(FALLBACK_HANDLERS)}. "
+                f"A declared safety behaviour with no code path is worse than "
+                f"no declaration at all."
+            )
+        self._fallback = FALLBACK_HANDLERS[declared]
+
         self.session    = build_session(model_path, self.profile)
         self.input_name = self.session.get_inputs()[0].name
         self._model_path = model_path
+
+        # Last successfully computed payload, for profiles whose fallback is to
+        # hold it. Never read by the nominal path.
+        self.last_known_good: Optional[OSPPayload] = None
+
+        # Test/analysis seam. Never set in flight: resilience/ attaches an
+        # injector to prove the recovery paths above actually execute, which
+        # is the only way a declared fallback stops being decorative.
+        self._fault_injector = None
+
         log.info(f"Platform profile: {self.profile.display_name}")
+        log.info(
+            f"Fallback on model failure: {declared} | "
+            f"watchdog {self.profile.assurance.watchdog_timeout_s:.1f}s"
+        )
 
         # Warm up (fills CUDA memory, pre-compiles kernel cache)
         log.info("Warming up ONNX session ...")
@@ -362,6 +534,17 @@ class OSPEngine:
         for _ in range(3):
             self.session.run(None, {self.input_name: dummy})
         log.info("Engine ready.")
+
+    def attach_fault_injector(self, injector) -> None:
+        """
+        Install a callable invoked at the top of every perception pass.
+
+        Used by `resilience/` to force the failures the platform profile claims
+        to survive. The injector may raise, stall, or corrupt state; whatever
+        it does, `run_tile` must still return a well-formed brief. Passing None
+        removes it.
+        """
+        self._fault_injector = injector
 
     def run_tile(
         self,
@@ -371,7 +554,17 @@ class OSPEngine:
         timestamp: Optional[str] = None,
     ) -> OSPPayload:
         """
-        Run full inference pipeline on one 6-band tile.
+        Run the perception pipeline on one tile, under the platform's
+        assurance envelope.
+
+        This is the guarded entry point and it does not raise. Perception is
+        allowed to fail; the spacecraft is not. Any exception out of the model
+        path, and any pass that overruns the profile's watchdog, is converted
+        into the profile's declared fallback brief, flagged `degraded` so the
+        ground can never mistake it for a healthy observation.
+
+        The nominal path is byte-for-byte what it was before the guard existed:
+        a healthy brief carries no degradation fields at all.
 
         Args:
             tile_6ch : (H, W, 6) float32 [0, 1]
@@ -380,7 +573,7 @@ class OSPEngine:
             timestamp: ISO 8601 UTC string
 
         Returns:
-            OSPPayload (serialisable to <2 KB JSON)
+            OSPPayload (serialisable to <2 KB JSON), degraded or nominal
         """
         if scene_id is None:
             h = hashlib.md5(tile_6ch.tobytes()).hexdigest()[:8]
@@ -393,6 +586,52 @@ class OSPEngine:
             # Demo footprint: Indian Ocean shipping lane
             footprint = {"lat_min": 8.0, "lat_max": 9.0,
                          "lon_min": 77.0, "lon_max": 78.0}
+
+        watchdog_s = self.profile.assurance.watchdog_timeout_s
+        t_start = time.perf_counter()
+
+        try:
+            payload = self._perceive(tile_6ch, scene_id, footprint, timestamp)
+
+            elapsed_s = time.perf_counter() - t_start
+            if watchdog_s > 0 and elapsed_s > watchdog_s:
+                raise WatchdogExpiry(
+                    f"perception took {elapsed_s:.2f}s against a "
+                    f"{watchdog_s:.1f}s watchdog for {self.profile.key}"
+                )
+
+        except Exception as e:
+            fault = f"{type(e).__name__}: {e}"
+            log.error(
+                f"[{scene_id}] perception failed ({fault}); applying "
+                f"{self.profile.assurance.fallback_on_model_failure}"
+            )
+            degraded = self._fallback(
+                self, scene_id, timestamp, footprint, tile_6ch, fault
+            )
+            # A degraded brief is still a brief: it gets a real compression
+            # ratio and is still checked against the link budget, because a
+            # fallback that quietly blows the payload cap has not helped.
+            self._finalise(degraded, tile_6ch)
+            return degraded
+
+        # Only a clean, in-budget pass becomes the thing a later failure holds.
+        self.last_known_good = payload
+        return payload
+
+    def _perceive(
+        self,
+        tile_6ch: np.ndarray,
+        scene_id: str,
+        footprint: dict,
+        timestamp: str,
+    ) -> OSPPayload:
+        """
+        The unguarded perception pass. Raises on any failure, by design: the
+        guard in `run_tile` is the only place that decides what a failure means.
+        """
+        if self._fault_injector is not None:
+            self._fault_injector(self, scene_id, tile_6ch)
 
         # ── Inference ─────────────────────────────────────────────────────────
         tensor = preprocess(tile_6ch)
@@ -430,11 +669,21 @@ class OSPEngine:
             inference_ms   = inference_ms,
         )
 
-        raw_bytes = tile_6ch.size * tile_6ch.itemsize
-        payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
-        # Settle the ratio against the final serialisation (the ratio digits
-        # themselves change the byte count) so the reported figure is exact.
-        payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
+        self._finalise(payload, tile_6ch)
+        return payload
+
+    def _finalise(self, payload: OSPPayload, tile_6ch: Optional[np.ndarray]) -> OSPPayload:
+        """
+        Settle the compression ratio and check the payload against the profile's
+        budgets. Runs for degraded briefs too: a fallback that quietly exceeds
+        the per-payload cap has not actually helped anyone.
+        """
+        raw_bytes = (tile_6ch.size * tile_6ch.itemsize) if tile_6ch is not None else 0
+        if raw_bytes:
+            payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
+            # Settle the ratio against the final serialisation (the ratio digits
+            # themselves change the byte count) so the reported figure is exact.
+            payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
         ratio = payload.compression_ratio
 
         # ── Budget enforcement ────────────────────────────────────────────────
@@ -446,25 +695,26 @@ class OSPEngine:
         wire_bytes = len(payload.to_json().encode())
         if wire_bytes > self.profile.link.max_payload_bytes:
             log.warning(
-                f"[{scene_id}] brief is {wire_bytes}B, over the "
+                f"[{payload.scene_id}] brief is {wire_bytes}B, over the "
                 f"{self.profile.link.max_payload_bytes}B link budget for "
                 f"{self.profile.key} — will need fragmenting across contacts."
             )
-        if inference_ms > self.profile.assurance.max_inference_latency_ms:
+        if payload.inference_ms > self.profile.assurance.max_inference_latency_ms:
             log.warning(
-                f"[{scene_id}] inference took {inference_ms:.0f}ms, over the "
+                f"[{payload.scene_id}] inference took {payload.inference_ms:.0f}ms, "
+                f"over the "
                 f"{self.profile.assurance.max_inference_latency_ms:.0f}ms budget "
                 f"for {self.profile.key}."
             )
 
         log.info(
-            f"[{scene_id}] {len(anomalies)} anomalies | "
-            f"cloud={cloud_cover:.1%} | "
-            f"{inference_ms:.0f}ms | "
+            f"[{payload.scene_id}] {len(payload.anomalies)} anomalies | "
+            f"cloud={payload.cloud_cover:.1%} | "
+            f"{payload.inference_ms:.0f}ms | "
             f"{wire_bytes}B JSON | "
             f"{ratio:,}:1 compression"
+            + (f" | DEGRADED: {payload.fallback_action}" if payload.degraded else "")
         )
-
         return payload
 
     def run_batch(
@@ -503,7 +753,15 @@ class OSPEngine:
             out_file = out_path_dir / f"{tp.stem}.json"
             out_file.write_text(p.to_json())
 
+        n_degraded = sum(1 for p in payloads if p.degraded)
         log.info(f"Batch complete: {len(payloads)} tiles processed → {out_dir}/")
+        if n_degraded:
+            log.warning(
+                f"{n_degraded} of {len(payloads)} briefs are degraded "
+                f"({self.profile.assurance.fallback_on_model_failure}). The "
+                f"batch completed, which is the point, but these briefs are "
+                f"not fresh observations."
+            )
         return payloads
 
 
@@ -574,7 +832,7 @@ if __name__ == "__main__":
     engine = OSPEngine(args.model, platform=args.platform)
     payloads = engine.run_batch(args.tiles, max_tiles=args.max, out_dir=args.out)
 
-    # Print summary to stdout (piped to OrbitLab telemetry log)
+    # Print summary to stdout (piped to the platform telemetry log)
     total_anomalies = sum(len(p.anomalies) for p in payloads)
     avg_ms          = sum(p.inference_ms for p in payloads) / max(1, len(payloads))
     avg_ratio       = sum(p.compression_ratio for p in payloads) / max(1, len(payloads))
@@ -582,6 +840,7 @@ if __name__ == "__main__":
     print(json.dumps({
         "summary": {
             "tiles_processed":  len(payloads),
+            "degraded_briefs":  sum(1 for p in payloads if p.degraded),
             "total_anomalies":  total_anomalies,
             "avg_inference_ms": round(avg_ms, 1),
             "avg_compression":  f"{avg_ratio:,.0f}:1",
@@ -589,5 +848,7 @@ if __name__ == "__main__":
             "latency_budget_ms": engine.profile.assurance.max_inference_latency_ms,
             "latency_budget_met": avg_ms < engine.profile.assurance.max_inference_latency_ms,
             "briefs_per_contact": engine.profile.link.briefs_per_contact(),
+            "fallback_on_model_failure":
+                engine.profile.assurance.fallback_on_model_failure,
         }
     }, indent=2))

@@ -7,7 +7,7 @@ risk-weighted intelligence alerts using an LLM.
 UPGRADE v2: Full GenAI architecture — RAG + Memory + Structured Reasoning
 
 Key upgrades over v1:
-  1. RAG-augmented prompts   — retrieved maritime knowledge grounds the LLM
+  1. RAG-augmented prompts   — retrieved domain knowledge grounds the LLM
                                in verifiable domain facts, not parametric memory
   2. Memory-augmented context — historical detections from SceneMemory are
                                injected so the LLM can detect recurring patterns
@@ -34,15 +34,19 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 # ── System prompt (v2 — RAG-aware, reasoning-trace enabled) ───────────────────
 
 ANALYST_SYSTEM_PROMPT_V2 = """\
-You are ORION, an orbital intelligence analyst for the OSP (Orbital Scene \
-Preprocessor) system aboard MOI-1A satellite, operated by TakeMe2Space.
+You are ORION, the ground-side analyst for the OSP (Orbital Scene \
+Preprocessor) system. OSP runs on-board a spacecraft and downlinks semantic \
+briefs instead of imagery. You narrate and contextualise those briefs. You do \
+not schedule downlinks, and you do not decide what the spacecraft does next: \
+that authority belongs to the deterministic policy engine, and your assessment \
+is reconciled against it.
 
 Your input is:
   1. A compact JSON telemetry payload produced by on-board AI inference over a \
 6-band multispectral tile (Sentinel-2 bands B2/B3/B4/B8/B11/B12).
-  2. RETRIEVED MARITIME KNOWLEDGE CONTEXT — domain facts retrieved from the \
+  2. RETRIEVED MARITIME KNOWLEDGE CONTEXT: domain facts retrieved from the \
 OSP knowledge base relevant to this scene. Ground your reasoning in these facts.
-  3. HISTORICAL CONTEXT — anomalies observed in this region in prior orbital \
+  3. HISTORICAL CONTEXT: anomalies observed in this region in prior orbital \
 passes. Use this to detect recurring patterns and escalate accordingly.
 
 REASONING PROTOCOL:
@@ -54,11 +58,14 @@ REASONING PROTOCOL:
 
 SWIR physics: B11/B12 provide strong metallic contrast even through haze. \
 Low confidence + SWIR anomaly = treat as medium confidence. \
-Cloud cover > 30% degrades visible bands — do not downgrade alert level for cloud.
+Cloud cover > 30% degrades visible bands: do not downgrade alert level for cloud.
 
 Return your brief as a single JSON object conforming to the schema below.
-Structured decoding is enforced by the API, so write naturally — you do not
+Structured decoding is enforced by the API, so write naturally: you do not
 need to avoid punctuation or worry about escaping.
+
+STYLE: never use em dashes. Use a colon, a comma, parentheses or a full stop
+instead. Your text is rendered directly in the operator console.
 
 JSON schema you MUST return:
 {
@@ -234,9 +241,9 @@ def generate_scene_narrative(payload: dict, brief: dict) -> str:
 
     cloud_note = f" under {cloud:.0%} cloud cover" if cloud > 0.2 else ""
     alert_note = {
-        "RED":    " — IMMEDIATE ATTENTION REQUIRED",
-        "ORANGE": " — elevated activity flagged",
-        "YELLOW": " — monitoring recommended",
+        "RED":    ": IMMEDIATE ATTENTION REQUIRED",
+        "ORANGE": ": elevated activity flagged",
+        "YELLOW": ": monitoring recommended",
         "GREEN":  "",
     }.get(alert_level, "")
 
@@ -381,7 +388,7 @@ def _parse_llm_json(raw: str) -> dict:
             "summary": (
                 "Analysis unavailable: the reasoning layer returned an "
                 "unparseable response. Falling back to deterministic policy "
-                "assessment — see the policy engine verdict."
+                "assessment: see the policy engine verdict."
             ),
             "scene_narrative": "",
             "reasoning_trace": [],

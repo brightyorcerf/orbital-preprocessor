@@ -118,6 +118,31 @@ class PassEfficiency:
         }[window.quality()]
 
 
+class BriefIngestError(ValueError):
+    """
+    A brief arrived that cannot be interpreted.
+
+    Deliberately an error rather than a best-effort coercion. A truncated brief
+    whose `anomalies` list did not survive the link would coerce to "zero
+    detections", which is not a missing observation, it is a *false* one: the
+    ground would record "nothing here" for a tile the spacecraft may well have
+    found something in, and the scheduler would score it at floor priority and
+    happily spend bytes on it. Refusing to guess is the whole point.
+    """
+
+
+def _as_float(value, field_name: str, default: Optional[float] = None) -> float:
+    """Coerce a numeric field, refusing anything that is not actually a number."""
+    if value is None and default is not None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BriefIngestError(f"{field_name!r} is {value!r}, expected a number")
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):
+        raise BriefIngestError(f"{field_name!r} is {value!r}, expected a finite number")
+    return v
+
+
 @dataclass(frozen=True)
 class BriefCandidate:
     """A semantic brief waiting in the downlink queue."""
@@ -132,25 +157,118 @@ class BriefCandidate:
 
     @classmethod
     def from_payload(cls, payload: dict) -> "BriefCandidate":
-        """Build a candidate from an OSP brief dict as written by the engine."""
-        anomalies = payload.get("anomalies", [])
-        class_counts: dict[str, int] = {}
-        for a in anomalies:
-            t = a.get("type", "unknown")
-            class_counts[t] = class_counts.get(t, 0) + 1
+        """
+        Build a candidate from an OSP brief dict as written by the engine.
 
-        return cls(
-            scene_id=payload.get("scene_id", "unknown"),
+        Total on well-formed briefs, and raises `BriefIngestError` on anything
+        it cannot interpret. It never silently repairs a brief: see the note on
+        `BriefIngestError` for why a repaired brief is more dangerous than a
+        rejected one.
+        """
+        if not isinstance(payload, dict):
+            raise BriefIngestError(f"brief is {type(payload).__name__}, expected an object")
+
+        scene_id = payload.get("scene_id")
+        if not isinstance(scene_id, str) or not scene_id:
+            raise BriefIngestError(f"'scene_id' is {scene_id!r}, expected a non-empty string")
+
+        anomalies = payload.get("anomalies", [])
+        if not isinstance(anomalies, list):
+            raise BriefIngestError(
+                f"'anomalies' is {type(anomalies).__name__}, expected a list"
+            )
+
+        class_counts: dict[str, int] = {}
+        confidences: list[float] = []
+        for i, a in enumerate(anomalies):
+            if not isinstance(a, dict):
+                raise BriefIngestError(
+                    f"anomaly {i} is {type(a).__name__}, expected an object"
+                )
+            t = a.get("type", "unknown")
+            if not isinstance(t, str):
+                raise BriefIngestError(f"anomaly {i} 'type' is {t!r}, expected a string")
+            class_counts[t] = class_counts.get(t, 0) + 1
+            confidences.append(_as_float(a.get("conf", 0.0), f"anomaly {i} 'conf'", 0.0))
+
+        count = payload.get("anomaly_count", len(anomalies))
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise BriefIngestError(f"'anomaly_count' is {count!r}, expected an integer")
+        if count != len(anomalies):
+            # The count and the list disagreeing means the brief was damaged or
+            # edited. Either way it no longer describes one observation.
+            raise BriefIngestError(
+                f"'anomaly_count' is {count} but {len(anomalies)} anomalies are present"
+            )
+
+        cloud = _as_float(payload.get("cloud_cover", 0.0), "'cloud_cover'", 0.0)
+
+        ts = payload.get("timestamp_utc", "")
+        if not isinstance(ts, str):
+            raise BriefIngestError(f"'timestamp_utc' is {ts!r}, expected a string")
+
+        try:
             # The brief's own serialisation is the wire size. Measuring it here
             # rather than trusting a stored field keeps the budget honest if a
             # brief is edited or re-annotated between generation and planning.
-            wire_bytes=len(json.dumps(payload, separators=(",", ":")).encode()),
-            anomaly_count=payload.get("anomaly_count", len(anomalies)),
-            max_confidence=max((a.get("conf", 0.0) for a in anomalies), default=0.0),
-            cloud_cover=payload.get("cloud_cover", 0.0),
+            wire_bytes = len(json.dumps(payload, separators=(",", ":")).encode())
+        except (TypeError, ValueError) as e:
+            raise BriefIngestError(f"brief is not serialisable: {e}") from e
+
+        return cls(
+            scene_id=scene_id,
+            wire_bytes=wire_bytes,
+            anomaly_count=count,
+            max_confidence=max(confidences, default=0.0),
+            cloud_cover=cloud,
             class_counts=class_counts,
-            timestamp_utc=payload.get("timestamp_utc", ""),
+            timestamp_utc=ts,
         )
+
+
+@dataclass(frozen=True)
+class RejectedBrief:
+    """A brief that failed ingest, kept so the ground can see what was lost."""
+
+    source: str
+    reason: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def load_brief_candidates(
+    items: Iterable[tuple[str, object]],
+) -> tuple[list[BriefCandidate], list[RejectedBrief]]:
+    """
+    Ingest briefs at the boundary, separating the usable from the damaged.
+
+    `items` is an iterable of (source label, brief) pairs, where each brief is
+    either raw JSON text as it came off the link or an already-parsed dict.
+
+    Returns (candidates, rejects). Both halves matter. Dropping a brief costs
+    one observation, and the scheduler plans the contact with what survived;
+    raising through the ground segment because one payload arrived truncated
+    would cost the entire contact. But a silent drop is its own failure, so
+    every rejection is returned with the reason it was rejected, and the
+    dashboard renders them.
+    """
+    candidates: list[BriefCandidate] = []
+    rejects: list[RejectedBrief] = []
+
+    for source, item in items:
+        try:
+            payload = json.loads(item) if isinstance(item, (str, bytes)) else item
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+            rejects.append(RejectedBrief(source, f"unparseable: {e}"))
+            continue
+
+        try:
+            candidates.append(BriefCandidate.from_payload(payload))
+        except BriefIngestError as e:
+            rejects.append(RejectedBrief(source, str(e)))
+
+    return candidates, rejects
 
 
 @dataclass(frozen=True)

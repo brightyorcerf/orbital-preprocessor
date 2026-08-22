@@ -1,0 +1,448 @@
+{
+  "generator": "resilience/degradation.py",
+  "model": "model/artifacts/osp_yolov8n_int8.onnx",
+  "weight_bits": 25026816,
+  "tiles_per_eval": 24,
+  "seeds_per_point": 3,
+  "split": "held-out validation",
+  "note": "Bit flips are placed uniformly over the quantised weight bit population. This is a conditional measurement, not a radiation model: it says what survives given N flips, and nothing about how often N flips occur.",
+  "seu": [
+    {
+      "flips": 0,
+      "seeds": 1,
+      "mean": {
+        "map50": 0.996,
+        "map50_95": 0.8556,
+        "detections_above_conf": 119,
+        "classes_scored": 4
+      },
+      "runs": [
+        {
+          "map50": 0.996,
+          "map50_95": 0.8556,
+          "detections_above_conf": 119,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 1.0,
+      "fraction_of_weight_bits": 0.0
+    },
+    {
+      "flips": 256,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.9957,
+        "map50_95": 0.8447,
+        "detections_above_conf": 119.0,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.9956,
+          "map50_95": 0.8388,
+          "detections_above_conf": 119,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9958,
+          "map50_95": 0.8465,
+          "detections_above_conf": 118,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9956,
+          "map50_95": 0.8489,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9997,
+      "fraction_of_weight_bits": 1.0229e-05
+    },
+    {
+      "flips": 1024,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.9941,
+        "map50_95": 0.8508,
+        "detections_above_conf": 119.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.9955,
+          "map50_95": 0.8495,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9914,
+          "map50_95": 0.8451,
+          "detections_above_conf": 119,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9954,
+          "map50_95": 0.8579,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9981,
+      "fraction_of_weight_bits": 4.0916e-05
+    },
+    {
+      "flips": 4096,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.9933,
+        "map50_95": 0.8374,
+        "detections_above_conf": 119.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.9952,
+          "map50_95": 0.8424,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9955,
+          "map50_95": 0.8273,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9892,
+          "map50_95": 0.8425,
+          "detections_above_conf": 119,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9973,
+      "fraction_of_weight_bits": 0.000163664
+    },
+    {
+      "flips": 8192,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.9891,
+        "map50_95": 0.8191,
+        "detections_above_conf": 119.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.989,
+          "map50_95": 0.8328,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9892,
+          "map50_95": 0.8144,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9892,
+          "map50_95": 0.8102,
+          "detections_above_conf": 118,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9931,
+      "fraction_of_weight_bits": 0.000327329
+    },
+    {
+      "flips": 16384,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.9935,
+        "map50_95": 0.7947,
+        "detections_above_conf": 118.0,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.9957,
+          "map50_95": 0.8201,
+          "detections_above_conf": 118,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9957,
+          "map50_95": 0.7953,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9892,
+          "map50_95": 0.7687,
+          "detections_above_conf": 116,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9975,
+      "fraction_of_weight_bits": 0.000654658
+    },
+    {
+      "flips": 32768,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.9805,
+        "map50_95": 0.7339,
+        "detections_above_conf": 116.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.9743,
+          "map50_95": 0.7813,
+          "detections_above_conf": 120,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.9891,
+          "map50_95": 0.7335,
+          "detections_above_conf": 115,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.978,
+          "map50_95": 0.6868,
+          "detections_above_conf": 114,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9844,
+      "fraction_of_weight_bits": 0.001309316
+    },
+    {
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.6173,
+        "map50_95": 0.3565,
+        "detections_above_conf": 98.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.6745,
+          "map50_95": 0.4424,
+          "detections_above_conf": 109,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.6444,
+          "map50_95": 0.3382,
+          "detections_above_conf": 98,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.5329,
+          "map50_95": 0.2888,
+          "detections_above_conf": 88,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.6198,
+      "fraction_of_weight_bits": 0.002618631
+    },
+    {
+      "flips": 131072,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.2593,
+        "map50_95": 0.1234,
+        "detections_above_conf": 316.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.4695,
+          "map50_95": 0.2569,
+          "detections_above_conf": 876,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.1581,
+          "map50_95": 0.0598,
+          "detections_above_conf": 33,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.1502,
+          "map50_95": 0.0535,
+          "detections_above_conf": 41,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.2603,
+      "fraction_of_weight_bits": 0.005237262
+    },
+    {
+      "flips": 262144,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0033,
+        "map50_95": 0.0009,
+        "detections_above_conf": 753.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0062,
+          "map50_95": 0.0018,
+          "detections_above_conf": 718,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0026,
+          "map50_95": 0.0008,
+          "detections_above_conf": 1542,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.001,
+          "map50_95": 0.0001,
+          "detections_above_conf": 1,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.0033,
+      "fraction_of_weight_bits": 0.010474525
+    },
+    {
+      "flips": 524288,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0002,
+        "map50_95": 0.0,
+        "detections_above_conf": 2971.0,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0003,
+          "map50_95": 0.0,
+          "detections_above_conf": 1045,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0002,
+          "map50_95": 0.0,
+          "detections_above_conf": 6957,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0001,
+          "map50_95": 0.0,
+          "detections_above_conf": 911,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.0002,
+      "fraction_of_weight_bits": 0.020949049
+    },
+    {
+      "flips": 1048576,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0004,
+        "map50_95": 0.0001,
+        "detections_above_conf": 6573.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0006,
+          "map50_95": 0.0001,
+          "detections_above_conf": 6137,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0007,
+          "map50_95": 0.0002,
+          "detections_above_conf": 12836,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0,
+          "map50_95": 0.0,
+          "detections_above_conf": 747,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.0004,
+      "fraction_of_weight_bits": 0.041898098
+    }
+  ],
+  "band_dropout": [
+    {
+      "dropped": "none",
+      "map50": 0.996,
+      "map50_95": 0.8556,
+      "detections_above_conf": 119,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B2",
+      "map50": 0.9847,
+      "map50_95": 0.8476,
+      "detections_above_conf": 121,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B3",
+      "map50": 0.9916,
+      "map50_95": 0.8729,
+      "detections_above_conf": 119,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B4",
+      "map50": 0.9779,
+      "map50_95": 0.8263,
+      "detections_above_conf": 119,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B8",
+      "map50": 0.9886,
+      "map50_95": 0.8359,
+      "detections_above_conf": 117,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B11",
+      "map50": 0.9955,
+      "map50_95": 0.836,
+      "detections_above_conf": 120,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B12",
+      "map50": 0.9849,
+      "map50_95": 0.851,
+      "detections_above_conf": 119,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B11+B12",
+      "map50": 0.996,
+      "map50_95": 0.852,
+      "detections_above_conf": 119,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "all",
+      "map50": 0.0,
+      "map50_95": 0.0,
+      "detections_above_conf": 0,
+      "classes_scored": 4
+    }
+  ]
+}

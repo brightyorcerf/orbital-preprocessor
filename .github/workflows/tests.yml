@@ -1,0 +1,45 @@
+name: tests
+
+# The badge this produces covers the deterministic layers: orbital mechanics,
+# the downlink scheduler, the authority boundary, and the failure behaviours.
+# It deliberately does not cover detector accuracy, which needs a trained
+# artifact this repository does not carry. Those tests skip, visibly, rather
+# than being quietly dropped from the run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Orbital mechanics, scheduler and authority boundary
+        run: python -m pytest test_orbital.py -v
+
+      - name: Failure behaviours and fault injection
+        run: python -m pytest test_resilience.py -v
+
+      - name: Engineering path
+        run: python -m pytest test_pipeline.py -v
+
+      - name: Report skips
+        if: always()
+        run: |
+          echo "Tests needing a trained artifact skip in CI by design."
+          echo "Run them locally after: python train.py --export"

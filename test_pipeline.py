@@ -67,6 +67,19 @@ class SkipTest(Exception):
     """
 
 
+# This file is both a standalone runner (`python test_pipeline.py`, which prints
+# a report and sets an exit code) and a pytest module (`pytest test_pipeline.py`,
+# which CI runs). Those two want opposite things from a failing test: the runner
+# needs the exception swallowed so the remaining tests still execute and the
+# report is complete, and pytest needs it raised or it records a pass.
+#
+# For most of this file's life only the first half was true, so every test in it
+# reported PASS under pytest no matter what it asserted. A green badge over a
+# suite that cannot fail is worse than no badge, so the outcome is re-raised
+# when pytest is the thing driving.
+_UNDER_PYTEST = "pytest" in sys.modules
+
+
 def run_test(name: str):
     """Decorator — catches exceptions, records PASS/FAIL/SKIP."""
     def decorator(fn):
@@ -82,14 +95,21 @@ def run_test(name: str):
                 ms = (time.perf_counter() - t0) * 1000
                 print(f"{SKIP}  {e}  [{ms:.1f}ms]")
                 _results.append((name, "SKIP", str(e)))
+                if _UNDER_PYTEST:
+                    import pytest
+                    pytest.skip(str(e))
             except AssertionError as e:
                 ms = (time.perf_counter() - t0) * 1000
                 print(f"{FAIL}  {e}  [{ms:.1f}ms]")
                 _results.append((name, "FAIL", str(e)))
+                if _UNDER_PYTEST:
+                    raise
             except Exception as e:
                 ms = (time.perf_counter() - t0) * 1000
                 print(f"{FAIL}  {type(e).__name__}: {e}  [{ms:.1f}ms]")
                 _results.append((name, "ERROR", f"{type(e).__name__}: {e}"))
+                if _UNDER_PYTEST:
+                    raise
         wrapper.__name__ = fn.__name__
         return wrapper
     return decorator
@@ -240,7 +260,13 @@ def test_preprocess_contract():
 
 @run_test("T3  Stem-swap domain-adaptation weight init (model/stem_swap.py)")
 def test_stem_weight_init():
-    import torch
+    # torch is a training dependency, not a runtime one: the deployed artifact
+    # is an ONNX graph. Its absence is a missing precondition, not a failure,
+    # the same way a missing trained artifact is in T13.
+    try:
+        import torch
+    except ImportError:
+        raise SkipTest("torch not installed — training dependency, see requirements.txt")
 
     # Simulate the swap: old_weight is [32,3,3,3] (pretrained RGB stem)
     torch.manual_seed(42)
@@ -554,10 +580,10 @@ def test_vram_budget():
     assert peak_mb < limit_mb, \
         f"Estimated peak VRAM {peak_mb:.1f} MB exceeds 4096 MB"
 
-    # Headroom: must be at least 3.5 GB free for concurrent OrbitLab apps
+    # Headroom: must be at least 3.5 GB free for other concurrent payload apps
     headroom_mb = limit_mb - peak_mb
     assert headroom_mb > 3500, \
-        f"Headroom {headroom_mb:.0f} MB insufficient for concurrent OrbitLab apps"
+        f"Headroom {headroom_mb:.0f} MB insufficient for concurrent payload apps"
 
     vram_utilisation = (peak_mb / limit_mb) * 100
 

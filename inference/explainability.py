@@ -228,12 +228,12 @@ class BandExplainer:
         sign = "elevated" if contrast > 0.02 else ("suppressed" if contrast < -0.02 else "neutral")
 
         interpretations = {
-            0: f"B2 (Blue): {sign} — {'possible foam/wake scatter' if sign == 'elevated' else 'ocean absorption typical'}",
-            1: f"B3 (Green): {sign} — {'bright object or cloud' if sign == 'elevated' else 'ocean typical'}",
-            2: f"B4 (Red): {sign} — {'painted metal surface or dust' if sign == 'elevated' else 'typical'}",
-            3: f"B8 (NIR): {sign} — {'wake or boundary signature' if sign == 'elevated' else 'absorbing (water/ocean typical)'}",
-            4: f"B11 (SWIR1): {sign} — {'metallic hull or man-made material' if sign == 'elevated' else 'water (expected low SWIR)'}",
-            5: f"B12 (SWIR2): {sign} — {'steel/alloy surface' if sign == 'elevated' else 'ocean (expected low SWIR)'}",
+            0: f"B2 (Blue): {sign}: {'possible foam/wake scatter' if sign == 'elevated' else 'ocean absorption typical'}",
+            1: f"B3 (Green): {sign}: {'bright object or cloud' if sign == 'elevated' else 'ocean typical'}",
+            2: f"B4 (Red): {sign}: {'painted metal surface or dust' if sign == 'elevated' else 'typical'}",
+            3: f"B8 (NIR): {sign}: {'wake or boundary signature' if sign == 'elevated' else 'absorbing (water/ocean typical)'}",
+            4: f"B11 (SWIR1): {sign}: {'metallic hull or man-made material' if sign == 'elevated' else 'water (expected low SWIR)'}",
+            5: f"B12 (SWIR2): {sign}: {'steel/alloy surface' if sign == 'elevated' else 'ocean (expected low SWIR)'}",
         }
         return interpretations.get(band_idx, f"Band {band_idx}: {sign}")
 
@@ -288,12 +288,12 @@ class BandExplainer:
         # Weak SWIR signal
         swir_contrast = (abs(contrast[4]) + abs(contrast[5])) / 2
         if swir_contrast < 0.03:
-            factors.append("Weak SWIR contrast — no metallic signature confirmation")
+            factors.append("Weak SWIR contrast: no metallic signature confirmation")
 
         # High NIR variability (water roughness / glint)
         nir_std = tile_6ch[:, :, 3].std()
         if nir_std > 0.2:
-            factors.append(f"High NIR variability (std={nir_std:.2f}) — possible sun glint")
+            factors.append(f"High NIR variability (std={nir_std:.2f}): possible sun glint")
 
         if not factors:
             factors.append("No significant uncertainty factors identified")
@@ -360,27 +360,27 @@ class UncertaintyEstimator:
         recommendations = []
 
         if cloud > 0.6:
-            factors.append(f"Severe cloud cover ({cloud:.0%}) — visible bands severely degraded")
+            factors.append(f"Severe cloud cover ({cloud:.0%}): visible bands severely degraded")
             recommendations.append("Schedule OVV for next clear pass")
 
         elif cloud > 0.3:
-            factors.append(f"Moderate cloud cover ({cloud:.0%}) — reduce confidence thresholds")
+            factors.append(f"Moderate cloud cover ({cloud:.0%}): reduce confidence thresholds")
             recommendations.append("Lower confidence acceptance threshold by 0.10–0.15")
 
         if not anomalies and cloud > 0.3:
-            factors.append("Zero detections under moderate cloud — may reflect sensing limitation")
+            factors.append("Zero detections under moderate cloud: may reflect sensing limitation")
             recommendations.append("Do not classify as area-clear; re-observe when cloud clears")
 
         low_conf_anomalies = [a for a in anomalies if a.get("conf", 1.0) < 0.55]
         if low_conf_anomalies:
             factors.append(
-                f"{len(low_conf_anomalies)} low-confidence detection(s) — "
+                f"{len(low_conf_anomalies)} low-confidence detection(s): "
                 "SWIR corroboration recommended"
             )
             recommendations.append("Cross-validate low-conf detections with SWIR band analysis")
 
         if not factors:
-            factors.append("No significant uncertainty factors — nominal sensing conditions")
+            factors.append("No significant uncertainty factors: nominal sensing conditions")
             recommendations.append("Standard confidence thresholds apply")
 
         return UncertaintyReport(

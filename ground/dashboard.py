@@ -1,13 +1,19 @@
 """
 ground/dashboard.py
 ───────────────────
-OSP Command Centre — Streamlit + Folium 2D Situational Awareness Dashboard.
+OSP Command Centre — Streamlit ground segment for the downlink autonomy stack.
+
+The page answers one question above the fold: what does this spacecraft downlink
+on its next contact, and which deterministic rule decided that? Everything else
+on the page is evidence for that answer.
 
 Run:
     streamlit run ground/dashboard.py
 
 Features:
-  - Load live JSON payloads from /output/ (OrbitLab mount) or upload manually
+  - Downlink plan for the next propagated contact window (the headline panel)
+  - Platform profile, link budget and authority state surfaced in the header
+  - Load live JSON payloads from an output mount or upload manually
   - 2D Folium map with tile footprint polygons + anomaly pins
   - Per-anomaly confidence colour coding
   - ORION GenAI Intelligence tab: RAG-grounded, memory-augmented LLM analysis
@@ -57,7 +63,7 @@ except ImportError:
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="OSP Command Centre",
+    page_title="OSP Command Centre · Downlink Autonomy",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -190,6 +196,88 @@ st.markdown(f"""
         font-size: 18px;
         letter-spacing: 0.5px;
     }}
+
+    /* Header: thesis + authority state. Deliberately the densest thing on the
+       page above the fold, because it is the only part guaranteed to be read. */
+    .thesis {{
+        color: #d4d4d4;
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 15px;
+        letter-spacing: 0.5px;
+        margin-bottom: 18px;
+    }}
+    .authority-strip {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 28px;
+        background: rgba(5, 5, 5, 0.8);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-left: 3px solid #d4d4d4;
+        border-radius: 6px;
+        padding: 14px 22px;
+        margin-bottom: 28px;
+    }}
+    .authority-item {{
+        display: flex;
+        flex-direction: column;
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #8b8b8b;
+    }}
+    .authority-item .val {{
+        font-weight: 400;
+        color: #f5f5f5;
+        font-size: 14px;
+        letter-spacing: 0.5px;
+        text-transform: none;
+        margin-top: 3px;
+    }}
+    .authority-item .qual {{
+        color: #8b8b8b;
+        font-size: 11px;
+        letter-spacing: 0.3px;
+        text-transform: none;
+        margin-top: 2px;
+    }}
+
+    /* Headline panel: the downlink plan. Sized to read as the point of the
+       page rather than as one section among several. */
+    .headline-panel {{
+        background: rgba(5, 5, 5, 0.82);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        padding: 26px 30px;
+        margin-bottom: 8px;
+        box-shadow: inset 0 0 14px rgba(255,255,255,0.02), 0 4px 26px rgba(0,0,0,0.45);
+    }}
+    .headline-panel .kicker {{
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 11px;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        color: #8b8b8b;
+        margin-bottom: 10px;
+    }}
+    .headline-panel .lede {{
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 21px;
+        font-weight: 300;
+        line-height: 1.5;
+        color: #f5f5f5;
+        letter-spacing: 0.3px;
+    }}
+    .headline-panel .lede b {{ font-weight: 600; color: #ffffff; }}
+    .headline-panel .sub {{
+        font-size: 14px;
+        color: #b4b4b4;
+        line-height: 1.7;
+        margin-top: 14px;
+    }}
+    .headline-panel .sub b {{ color: #f5f5f5; font-weight: 500; }}
 
     /* Detections Timeline */
     .timeline-item {{
@@ -547,18 +635,26 @@ def render_mission_plan(plan: dict) -> None:
     w = plan["window"]
     b = plan["budget"]
 
-    st.markdown("### DOWNLINK PLAN — NEXT CONTACT")
-
-    # The headline sentence: real pass geometry driving a real resource decision.
+    # The headline panel. This is the point of the page, so it is styled as the
+    # headline rather than as one section among several: real pass geometry
+    # driving a real resource decision, with the rule that produced it.
     st.markdown(
-        f"<div class='mission-strip' style='display:block; line-height:1.7;'>"
-        f"<b>Next pass over {plan['_station_name']}:</b> "
-        f"{w['aos_utc'][11:16]} UTC, {w['duration_s'] / 60:.1f} minutes, "
-        f"{b['downlink_kbps']:.0f} kbps → {b['usable_bytes'] / 1e6:.2f} MB.<br>"
-        f"That is <b>{plan['_raw_scenes']:.2f} raw scenes</b> or "
-        f"<b>{plan['_capacity_briefs']:,} briefs</b>. "
-        f"{len(plan['scheduled'])} of {len(plan['decisions'])} queued briefs fit; "
-        f"{len(plan['deferred'])} wait for the next pass."
+        f"<div class='headline-panel'>"
+        f"<div class='kicker'>Downlink plan · next contact</div>"
+        f"<div class='lede'>"
+        f"Next pass over {plan['_station_name']} at "
+        f"<b>{w['aos_utc'][11:16]} UTC</b>, lasting "
+        f"<b>{w['duration_s'] / 60:.1f} minutes</b> at "
+        f"{b['downlink_kbps']:.0f} kbps, which is "
+        f"<b>{b['usable_bytes'] / 1e6:.2f} MB</b> of usable link."
+        f"</div>"
+        f"<div class='sub'>"
+        f"That is <b>{plan['_raw_scenes']:.2f} raw scenes</b>, or "
+        f"<b>{plan['_capacity_briefs']:,} semantic briefs</b>. "
+        f"<b>{len(plan['scheduled'])} of {len(plan['decisions'])}</b> queued briefs "
+        f"go down on this pass; {len(plan['deferred'])} wait for the next one. "
+        f"Every accept and every defer below carries the rule that produced it."
+        f"</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -575,7 +671,7 @@ def render_mission_plan(plan: dict) -> None:
 
     st.progress(
         min(1.0, b["utilisation"]),
-        text=f"Window utilisation {b['utilisation']:.1%} — "
+        text=f"Window utilisation {b['utilisation']:.1%}, "
              f"{b['bytes_used']:,} B of {b['usable_bytes']:,} B",
     )
 
@@ -594,7 +690,7 @@ def render_mission_plan(plan: dict) -> None:
         f"At this window's {b['usable_bytes'] / 1e6:.2f} MB, that is "
         f"<b>{passes:,.0f} contacts</b> (~{days:,.0f} days at "
         f"{plan.get('_passes_per_day', 2.0):.1f} usable passes/day) versus "
-        f"<b>one</b> for the briefs — the same detections, "
+        f"<b>one</b> for the briefs. Same detections, "
         f"{raw_mb * 1e6 / max(1, b['bytes_used']):,.0f}x fewer bytes."
         f"</div>",
         unsafe_allow_html=True,
@@ -604,7 +700,7 @@ def render_mission_plan(plan: dict) -> None:
     st.markdown("#### DECISION AUDIT TRAIL")
     st.caption(
         f"Every brief, the rule applied, and the running byte count. "
-        f"Policy fingerprint `{plan['policy_hash']}` — change a scheduling "
+        f"Policy fingerprint `{plan['policy_hash']}`. Change a scheduling "
         f"constant and this hash changes, so a plan can never be silently "
         f"replayed against a different policy. "
         f"LLM in control loop: **{plan['_llm_in_control_loop']}**."
@@ -634,18 +730,219 @@ def render_mission_plan(plan: dict) -> None:
         st.info(
             f"One or more briefs exceed the {plan['_max_payload_bytes']} B "
             f"per-payload cap for this platform and are held for fragmentation "
-            f"across contacts — a priority-independent rule, so a high-value "
+            f"across contacts. This is a priority-independent rule, so a high-value "
             f"brief cannot buy its way past a hard link constraint."
         )
+
+
+# ── Header ────────────────────────────────────────────────────────────────────
+#
+# The first screen has one job: make the thesis unambiguous to someone who
+# reads nothing else. That thesis is not "we detect things in satellite
+# imagery" — the detector is the workload, not the argument. It is that a
+# spacecraft decides what to downlink under real orbital and link constraints,
+# by deterministic rule, with the generative layer architecturally unable to
+# reach the decision.
+#
+# The platform profile is rendered from the *active* profile rather than
+# hardcoded, and always next to its provenance. A profile whose numbers are
+# DERIVED says so here, in the header, not in a footnote: the profile is an
+# engineering envelope, never a claim about anyone's flight hardware.
+
+def render_header(platform_key: str | None) -> None:
+    """Render the title, the thesis line and the authority strip."""
+    st.markdown("<h2 style='margin-top:0;'>OSP COMMAND CENTRE</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='thesis'>What this spacecraft downlinks on its next contact, "
+        "decided by rule, not by a model.</div>",
+        unsafe_allow_html=True,
+    )
+
+    try:
+        from config.platforms import Provenance, get_profile
+        from orbital.downlink import policy_fingerprint
+
+        profile = get_profile(platform_key)
+        prov = profile.link.provenance
+        if prov is Provenance.DERIVED:
+            qualifier = f"{prov.value.upper()} envelope, not a {profile.operator} specification"
+        else:
+            qualifier = f"{prov.value.upper()} figures, {profile.operator}"
+
+        assurance = profile.assurance
+        authority = "FALSE" if not assurance.llm_in_control_loop else "TRUE"
+
+        items = [
+            ("Platform profile", profile.display_name, qualifier),
+            ("Link budget",
+             f"{profile.link.downlink_kbps:.0f} kbps",
+             f"{profile.link.max_payload_bytes:,} B per payload"),
+            ("Inference budget",
+             f"{assurance.max_inference_latency_ms:.0f} ms",
+             f"watchdog {assurance.watchdog_timeout_s:.0f} s"),
+            ("LLM in control loop", authority,
+             "deterministic execution required"
+             if assurance.deterministic_execution_required else "advisory only"),
+            ("Policy fingerprint", policy_fingerprint(),
+             "changes if any scheduling constant changes"),
+        ]
+        cells = "".join(
+            f"<div class='authority-item'>{label}"
+            f"<span class='val'>{value}</span>"
+            f"<span class='qual'>{qual}</span></div>"
+            for label, value, qual in items
+        )
+        st.markdown(f"<div class='authority-strip'>{cells}</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.caption(f"Platform profile unavailable: {e}")
+
+
+# ── Fault injection ───────────────────────────────────────────────────────────
+#
+# The platform profile declares a watchdog, a latency budget and a named
+# fallback for model failure. This panel is where those stop being strings.
+# Results are read from a committed artifact rather than computed at page load:
+# the sweep is minutes of CPU, and a dashboard that silently recomputed it
+# would be showing a different number every time it was opened.
+
+RESILIENCE_ARTIFACT = Path(__file__).parent.parent / "resilience" / "artifacts" / "degradation.json"
+
+FAILURE_MODES = [
+    ("Model crash or execution provider fault",
+     "Declared fallback fires, brief flagged `degraded`",
+     "test_a_model_crash_produces_the_declared_fallback"),
+    ("Perception overruns the watchdog",
+     "Same fallback, fault recorded as `WatchdogExpiry`",
+     "test_a_stall_trips_the_watchdog_and_fires_the_fallback"),
+    ("Inference over the latency budget, but returning",
+     "Reported, brief still stands. Not treated as a failure",
+     "test_a_latency_budget_breach_is_reported"),
+    ("Failure on the first tile, nothing to hold",
+     "Degrades to an empty flagged brief. Nothing invented",
+     "test_hold_with_no_history_degrades_further_rather_than_inventing"),
+    ("Truncated or malformed brief on the ground",
+     "Quarantined with a reason. Contact still planned",
+     "test_structurally_destructive_corruption_is_quarantined"),
+    ("Single flipped byte in a brief",
+     "Not always detectable. Documented gap, no integrity check on the wire",
+     "test_a_single_flipped_byte_can_survive_ingest_undetected"),
+    ("Bit flips in INT8 weights",
+     "Not detectable at all. The model runs and returns confident nonsense",
+     "test_an_upset_model_still_loads_and_runs"),
+]
+
+
+def render_resilience_panel() -> None:
+    """Failure modes, declared responses, and the measured degradation curve."""
+    st.markdown("### FAULT INJECTION")
+    st.caption(
+        "Every assurance field in the active platform profile has a test that "
+        "makes it happen. The table is what the system does when it breaks; the "
+        "curve is what it costs when it breaks quietly."
+    )
+
+    import pandas as pd
+
+    st.dataframe(
+        pd.DataFrame(
+            [{"Fault": f, "Response": r, "Test": t} for f, r, t in FAILURE_MODES]
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    if not RESILIENCE_ARTIFACT.exists():
+        st.info(
+            "No degradation sweep found. Generate it with "
+            "`python resilience/degradation.py`."
+        )
+        return
+
+    data = json.loads(RESILIENCE_ARTIFACT.read_text())
+    seu = data.get("seu", [])
+    if not seu:
+        return
+
+    import plotly.graph_objects as go
+
+    xs = [max(r["flips"], 1) for r in seu]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs,
+        y=[r["mean"]["map50"] for r in seu],
+        name="mAP@0.5",
+        mode="lines+markers",
+        line=dict(color="#f5f5f5", width=2),
+    ))
+    fig.add_trace(go.Scatter(
+        x=xs,
+        y=[r["mean"]["detections_above_conf"] for r in seu],
+        name="detections emitted",
+        mode="lines+markers",
+        yaxis="y2",
+        line=dict(color="#8b8b8b", width=2, dash="dot"),
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter", color="#d4d4d4", size=12),
+        margin=dict(l=10, r=10, t=30, b=10),
+        height=380,
+        xaxis=dict(type="log", title="weight bits flipped (log scale)",
+                   gridcolor="rgba(255,255,255,0.06)"),
+        yaxis=dict(title="mAP@0.5", range=[0, 1.05],
+                   gridcolor="rgba(255,255,255,0.06)"),
+        yaxis2=dict(title="detections emitted", overlaying="y", side="right",
+                    showgrid=False),
+        legend=dict(orientation="h", y=1.12, x=0),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    st.caption(
+        f"Single-event upsets injected into the {data['weight_bits']:,} bits of "
+        f"quantised weight memory, scored over {data['tiles_per_eval']} held-out "
+        f"tiles, {data['seeds_per_point']} random draws per point. "
+        "Read the two lines together. Accuracy holds to roughly 0.1% of weight "
+        "memory and then collapses, and as it collapses the model emits **more** "
+        "detections, not fewer: 119 at baseline against 6,573 at the far end. "
+        "The failure mode is not silence, it is confident nonsense, and nothing "
+        "in the stack raises. This is the one fault on the table above that the "
+        "declared fallback cannot catch, because there is no error to catch."
+    )
+
+    bands = data.get("band_dropout", [])
+    if bands:
+        with st.expander("Spectral band dropout: a result that went against the design"):
+            st.dataframe(
+                pd.DataFrame([
+                    {"Band dropped": b["dropped"], "mAP@0.5": b["map50"],
+                     "Detections": b["detections_above_conf"]}
+                    for b in bands
+                ]),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "Zeroing any single band, including the B11/B12 short-wave "
+                "infrared pair, costs this model nothing measurable. That "
+                "contradicts the stated reason for carrying 6 bands at all. "
+                "The `all` row is a control, not a scenario: it confirms the "
+                "harness is biting, so the null results above are real. "
+                "The honest reading is that the synthetic corpus paints objects "
+                "with high contrast into every band, so it cannot test the "
+                "infrared argument. Retraining on real imagery is what would "
+                "settle it."
+            )
 
 
 # ── Main UI ───────────────────────────────────────────────────────────────────
 
 def main():
-    st.markdown("<h2 style='margin-top:0;'>OSP COMMAND CENTRE</h2>", unsafe_allow_html=True)
-    st.markdown("<div style='color:#8b8b8b; margin-bottom: 24px; font-family: \"Titillium Web\", sans-serif; letter-spacing: 1px; text-transform: uppercase;'>Orbital Scene Preprocessor — MOI-1A Situational Awareness</div>", unsafe_allow_html=True)
-
     # ── Sidebar ───────────────────────────────────────────────────────────────
+    # Rendered before the header so the header can report the *selected*
+    # platform profile. Streamlit places sidebar output in its own container,
+    # so this does not affect the order of the main column.
     with st.sidebar:
         st.markdown("### MISSION CONFIG")
 
@@ -701,6 +998,8 @@ def main():
         ovv_reason     = st.selectbox("Reason", ["high_uncertainty", "anomaly_cluster", "manual_verify"])
         send_ovv       = st.button("SEND OVV REQUEST")
 
+    render_header(platform_choice)
+
     # ── Load data ─────────────────────────────────────────────────────────────
     payloads = []
 
@@ -735,47 +1034,6 @@ def main():
         st.info("No payloads loaded. Select a data source in the sidebar.")
         return
 
-    # ── Mission Status Strip ──────────────────────────────────────────────────
-    total_anomalies = sum(p.get("anomaly_count", 0) for p in payloads)
-    avg_ms     = sum(p.get("meta", {}).get("inference_ms", 0) for p in payloads) / len(payloads)
-    avg_cloud  = sum(p.get("cloud_cover", 0) for p in payloads) / len(payloads)
-    comp_ratio = payloads[0].get("meta", {}).get("compression_ratio", 85000)
-
-    status_color = "#f5f5f5" if total_anomalies > 0 else "#8b8b8b"
-    status_text = "ANOMALY DETECTED" if total_anomalies > 0 else "NOMINAL"
-
-    st.markdown(
-        f"""
-        <div class="mission-strip">
-            <div class="mission-stat">Mission State <span class="val" style="color:{status_color}">{status_text}</span></div>
-            <div class="mission-stat">Active Node <span class="val">MOI-1A ORBITAL</span></div>
-            <div class="mission-stat">Total Anomalies <span class="val">{total_anomalies}</span></div>
-            <div class="mission-stat">Inference Time <span class="val">{avg_ms:.0f} ms</span></div>
-            <div class="mission-stat">Cloud Cover <span class="val">{avg_cloud:.0%}</span></div>
-            <div class="mission-stat">Compression <span class="val">{comp_ratio:,}:1</span></div>
-        </div>
-        """, unsafe_allow_html=True
-    )
-
-    # ── Provenance ────────────────────────────────────────────────────────────
-    # Stated up front, because a dashboard that mixes measured, simulated and
-    # assumed values without saying which is which is not a demo — it is a
-    # claim the reader cannot check.
-    if manifest:
-        camp = manifest.get("campaign", {})
-        mdl = manifest.get("model", {})
-        st.caption(
-            f"**Detections:** measured — `{Path(mdl.get('artifact', '')).name}`, "
-            f"{mdl.get('size_mb', '?')} MB {mdl.get('precision', '')}, run over "
-            f"{manifest.get('source', {}).get('count', '?')} held-out validation tiles. "
-            f"**Geolocation:** real — SGP4 propagation of {camp.get('satellite', '?')} "
-            f"(NORAD {camp.get('norad_id', '?')}), TLE epoch {camp.get('tle_epoch_utc', '?')}, "
-            f"{camp.get('region', '')}. "
-            f"**Pixels:** synthetic — {manifest.get('source', {}).get('tiles', '')}."
-        )
-
-    st.divider()
-
     # ── Mission plan ──────────────────────────────────────────────────────────
     if orbital_ready:
         try:
@@ -803,19 +1061,62 @@ def main():
 
     st.divider()
 
+
+    # ── Mission Status Strip ──────────────────────────────────────────────────
+    n_briefs   = len(payloads)
+    total_anomalies = sum(p.get("anomaly_count", 0) for p in payloads)
+    avg_ms     = sum(p.get("meta", {}).get("inference_ms", 0) for p in payloads) / len(payloads)
+    avg_cloud  = sum(p.get("cloud_cover", 0) for p in payloads) / len(payloads)
+    comp_ratio = payloads[0].get("meta", {}).get("compression_ratio", 85000)
+
+    status_color = "#f5f5f5" if total_anomalies > 0 else "#8b8b8b"
+    status_text = "ANOMALY DETECTED" if total_anomalies > 0 else "NOMINAL"
+
+    st.markdown(
+        f"""
+        <div class="mission-strip">
+            <div class="mission-stat">Queue state <span class="val" style="color:{status_color}">{status_text}</span></div>
+            <div class="mission-stat">Briefs in queue <span class="val">{n_briefs}</span></div>
+            <div class="mission-stat">Detections <span class="val">{total_anomalies}</span></div>
+            <div class="mission-stat">Mean inference <span class="val">{avg_ms:.0f} ms</span></div>
+            <div class="mission-stat">Mean cloud <span class="val">{avg_cloud:.0%}</span></div>
+            <div class="mission-stat">Compression ratio <span class="val">{comp_ratio:,}:1</span></div>
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+    # ── Provenance ────────────────────────────────────────────────────────────
+    # Stated up front, because a dashboard that mixes measured, simulated and
+    # assumed values without saying which is which is not a demo — it is a
+    # claim the reader cannot check.
+    if manifest:
+        camp = manifest.get("campaign", {})
+        mdl = manifest.get("model", {})
+        st.caption(
+            f"**Detections:** measured, from `{Path(mdl.get('artifact', '')).name}`, "
+            f"{mdl.get('size_mb', '?')} MB {mdl.get('precision', '')}, run over "
+            f"{manifest.get('source', {}).get('count', '?')} held-out validation tiles. "
+            f"**Geolocation:** real, SGP4 propagation of {camp.get('satellite', '?')} "
+            f"(NORAD {camp.get('norad_id', '?')}), TLE epoch {camp.get('tle_epoch_utc', '?')}, "
+            f"{camp.get('region', '')}. "
+            f"**Pixels:** synthetic, {manifest.get('source', {}).get('tiles', '')}."
+        )
+
+    st.divider()
+
     # ── Main layout: map + analysis ───────────────────────────────────────────
     map_col, data_col = st.columns([3, 2])
 
     with map_col:
-        tab1, tab2 = st.tabs(["TACTICAL 2D", "STRATEGIC 3D"])
+        tab1, tab2 = st.tabs(["GROUND TRACK 2D", "ORBIT VIEW 3D"])
         
         with tab1:
-            st.markdown("### 2D SITUATIONAL AWARENESS")
+            st.markdown("### SCENE COVERAGE AND GROUND TRACK")
             fmap = build_folium_map(payloads)
             st_data = st_folium(fmap, width=700, height=500, returned_objects=["last_object_clicked"], use_container_width=True)
             
         with tab2:
-            st.markdown("### 3D SITUATIONAL AWARENESS")
+            st.markdown("### ORBIT AND CONTACT GEOMETRY")
             center_lat, center_lon = 8.5, 77.5
             if st_data and st_data.get("last_object_clicked"):
                 center_lat = st_data["last_object_clicked"]["lat"]
@@ -838,7 +1139,7 @@ def main():
             st.plotly_chart(fig, width="stretch")
 
     with data_col:
-        st.markdown("### INTELLIGENCE FEED")
+        st.markdown("### BRIEF QUEUE")
 
         for payload in payloads:
             scene_id  = payload.get("scene_id", "?")
@@ -878,7 +1179,7 @@ def main():
             # reader to take the model's word for it.
             thumb = payload.get("_thumbnail")
             if thumb and Path(thumb).exists():
-                with st.expander(f"View tile — {scene_id}"):
+                with st.expander(f"View tile · {scene_id}"):
                     st.image(
                         thumb,
                         width="stretch",
@@ -888,6 +1189,10 @@ def main():
                             "their true pixel coordinates."
                         ),
                     )
+
+    # ── Fault injection results ───────────────────────────────────────────────
+    st.divider()
+    render_resilience_panel()
 
     # ── OVV command ────────────────────────────────────────────────────────────
     if send_ovv:
@@ -940,7 +1245,7 @@ def main():
 
                     st.markdown(
                         f"<div class='metric-card {alert_class}'>"
-                        f"<b>{payload.get('scene_id')} — "
+                        f"<b>{payload.get('scene_id')} · "
                         f"<span style='color:{color}'>{level}</span></b>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -959,7 +1264,7 @@ def main():
                                     "LOW":      "#f5f5f5",
                                 }.get(risk, "#8b8b8b")
                                 st.markdown(
-                                    f"**{aa.get('type', '').upper()}** — "
+                                    f"**{aa.get('type', '').upper()}** · "
                                     f"<span style='color:{risk_color}'>{risk}</span> risk<br>"
                                     f"{aa.get('reasoning', '')}",
                                     unsafe_allow_html=True,
@@ -1054,7 +1359,7 @@ def main():
                                     "MEDIUM": "#f5f5f5",   "LOW":  "#f5f5f5",
                                 }.get(risk, "#8b8b8b")
                                 st.markdown(
-                                    f"**{aa.get('type','?').upper()}** — "
+                                    f"**{aa.get('type','?').upper()}** · "
                                     f"<span style='color:{risk_color}'>{risk}</span> risk | "
                                     f"conf={aa.get('conf',0):.0%}<br>"
                                     f"{aa.get('reasoning','')}<br>"
@@ -1087,7 +1392,7 @@ def main():
 
     # ── Spectral Explainability ───────────────────────────────────────────────
     if _EXPLAINABILITY_AVAILABLE and payloads:
-        with st.expander("SPECTRAL EXPLAINABILITY — UNCERTAINTY ANALYSIS"):
+        with st.expander("SPECTRAL EXPLAINABILITY · UNCERTAINTY ANALYSIS"):
             payload_ex   = payloads[0]
             anomalies_ex = payload_ex.get("anomalies", [])
             uncertainty_est = UncertaintyEstimator()
@@ -1108,7 +1413,7 @@ def main():
 
     # ── Scene Memory Timeline ─────────────────────────────────────────────────
     if _MEMORY_AVAILABLE:
-        with st.expander("SCENE MEMORY — ORBITAL PASS HISTORY"):
+        with st.expander("SCENE MEMORY · ORBITAL PASS HISTORY"):
             try:
                 memory    = get_memory()
                 m1, m2    = st.columns(2)
@@ -1134,7 +1439,7 @@ def main():
     # ── Footer ────────────────────────────────────────────────────────────────
     st.divider()
     st.caption(
-        "OSP Command Centre · MOI-1A · TakeMe2Space · "
+        "OSP Command Centre · deterministic downlink autonomy · "
         "GenAI: Edge AI + RAG + Memory + Agentic Loop"
     )
 
