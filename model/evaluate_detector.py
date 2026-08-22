@@ -43,6 +43,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from inference.engine import CLASS_NAMES, CONF_THRESHOLD, IOU_THRESHOLD, postprocess
+from data.tiles import list_tiles, read_tile
 
 INPUT_SIZE = 640
 
@@ -202,13 +203,17 @@ def evaluate(
     iou_nms: float = IOU_THRESHOLD,
     limit: int | None = None,
 ) -> dict:
-    """Score a backend over a directory of .npy tiles and YOLO label files."""
+    """Score a backend over a directory of tiles and YOLO label files.
+
+    Tiles may be `.npy` (pre-materialised 6-band) or RGB with bands derived
+    on read; `data/tiles.py` hides the difference.
+    """
     images_dir, labels_dir = Path(images_dir), Path(labels_dir)
-    tiles = sorted(images_dir.glob("*.npy"))
+    tiles = list_tiles(images_dir)
     if limit:
         tiles = tiles[:limit]
     if not tiles:
-        raise FileNotFoundError(f"No .npy tiles in {images_dir}")
+        raise FileNotFoundError(f"No tiles in {images_dir}")
 
     n_cls = len(CLASS_NAMES)
     per_class = {c: {"dets": [], "conf": [], "n_gt": 0} for c in range(n_cls)}
@@ -216,7 +221,7 @@ def evaluate(
     n_above_thresh = 0
 
     for tp_path in tiles:
-        tile = np.load(str(tp_path)).astype(np.float32)
+        tile = read_tile(tp_path)
         gts  = load_labels(labels_dir / (tp_path.stem + ".txt"))
 
         raw = backend(tile)

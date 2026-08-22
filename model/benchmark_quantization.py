@@ -33,6 +33,8 @@ import onnxruntime as ort
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from data.tiles import list_tiles, read_tile
+
 
 def _session(path: str) -> ort.InferenceSession:
     """Deterministic single-threaded CPU session — matches flight config."""
@@ -52,12 +54,12 @@ def benchmark(fp32_path: str, int8_path: str, tiles_dir: str,
     fp32, int8 = _session(fp32_path), _session(int8_path)
     name = fp32.get_inputs()[0].name
 
-    tiles = sorted(Path(tiles_dir).glob("*.npy"))[:n_tiles]
+    tiles = list_tiles(tiles_dir)[:n_tiles]
     if not tiles:
         raise FileNotFoundError(f"No .npy tiles in {tiles_dir}")
 
     batches = [
-        np.load(str(t)).astype(np.float32).transpose(2, 0, 1)[None] for t in tiles
+        read_tile(t).transpose(2, 0, 1)[None] for t in tiles
     ]
 
     # Warm up both graphs before timing; the first run pays allocation and

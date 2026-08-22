@@ -3,7 +3,24 @@ ground/dataset_6ch.py
 ──────────────────────
 PyTorch Dataset for 6-channel OSP multispectral tiles.
 
-Loads .npy tile files + paired YOLO-format label files.
+Loads tiles + paired YOLO-format label files, from either of two storage
+layouts. Both yield an identical (6, H, W) float32 tensor in [0, 1]; they
+differ only in what is on disk and when the band derivation runs.
+
+  .npy   — a pre-materialised (H, W, 6) float32 tile. Used by the synthetic
+           smoke-test fixture, where the tile count is small.
+
+  .png / .jpg
+         — a 3-channel RGB tile, with the six bands derived at __getitem__
+           time by data.synthetic_bands.rgb_to_6band().
+
+The second path exists for a storage reason, not a stylistic one. A 640x640
+6-band float32 tile is 9.8 MB on disk. A DOTA-derived training set of ~20k
+tiles would be roughly 200 GB materialised, against ~2 GB as JPEG. Since
+rgb_to_6band() is a fixed linear map plus a resample — microseconds, and
+deterministic — deriving on read costs nothing and makes real-imagery
+training tractable at all.
+
 Compatible with Ultralytics YOLOv8 training when used alongside
 a standard data.yaml config.
 
@@ -26,12 +43,21 @@ Usage:
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+# Running this file as a script puts its own directory on sys.path rather than
+# the repository root, so the sibling `data` package needs help being found.
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from data.tiles import TILE_SUFFIXES, list_tiles, read_tile
 
 log = logging.getLogger(__name__)
 
@@ -41,11 +67,16 @@ class MultiSpectralDataset(Dataset):
     """
     Dataset of (6-band tile, YOLO labels) pairs.
 
-    Expects a directory of .npy files and a parallel directory of .txt labels.
-    Files are matched by stem (filename without extension).
+    Expects a directory of tiles (.npy, .png or .jpg) and a parallel directory
+    of .txt labels. Files are matched by stem (filename without extension).
+
+    A directory may hold either storage layout, or both; each file is
+    dispatched on its own suffix. Mixing is not encouraged but is not an
+    error, because the tensor handed to the model is identical either way.
 
     Args:
-        img_dir   : directory containing *.npy tiles, shape (H, W, 6) float32
+        img_dir   : directory of tiles — *.npy (H, W, 6) float32, or *.png /
+                    *.jpg RGB with bands derived on read
         label_dir : directory containing *.txt YOLO labels
         tile_size : expected spatial size (default 640); tiles are resized if needed
         transform : optional callable applied to the (6, H, W) float32 tensor
@@ -63,19 +94,35 @@ class MultiSpectralDataset(Dataset):
         self.tile_size = tile_size
         self.transform = transform
 
-        # Collect all .npy files; sort for reproducibility
-        self.img_paths = sorted(self.img_dir.glob("*.npy"))
+        # Collect every supported tile file; sort for reproducibility.
+        self.img_paths = list_tiles(self.img_dir)
 
         if len(self.img_paths) == 0:
             raise FileNotFoundError(
-                f"No .npy files found in {self.img_dir}. "
-                "Run data/synth_demo.py to generate the dataset first."
+                f"No tiles found in {self.img_dir} "
+                f"(looked for {', '.join(TILE_SUFFIXES)}). "
+                "Run data/synth_demo.py for the synthetic fixture, or "
+                "data/dota_prep.py to build the DOTA training set."
             )
 
-        log.info(f"MultiSpectralDataset: {len(self.img_paths)} tiles from {self.img_dir}")
+        n_derived = sum(1 for p in self.img_paths if p.suffix.lower() != ".npy")
+        log.info(
+            f"MultiSpectralDataset: {len(self.img_paths)} tiles from "
+            f"{self.img_dir} ({n_derived} RGB with derived bands, "
+            f"{len(self.img_paths) - n_derived} pre-materialised 6-band)"
+        )
 
     def __len__(self) -> int:
         return len(self.img_paths)
+
+    def _read_tile(self, img_path: Path) -> np.ndarray:
+        """
+        Read one tile as (H, W, 6) float32 in [0, 1].
+
+        Delegates to `data.tiles.read_tile`, which is the single place that
+        knows how a tile is stored. The band-derivation caveat lives there.
+        """
+        return read_tile(img_path)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -87,7 +134,7 @@ class MultiSpectralDataset(Dataset):
         img_path = self.img_paths[idx]
 
         # ── Load image ────────────────────────────────────────────────────────
-        tile = np.load(str(img_path))  # (H, W, 6) float32
+        tile = self._read_tile(img_path)  # (H, W, 6) float32
 
         # Validate / resize
         if tile.ndim != 3 or tile.shape[2] != 6:

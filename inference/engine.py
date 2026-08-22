@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import time
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,15 @@ from typing import Optional
 import cv2
 import numpy as np
 import onnxruntime as ort
+
+# `python inference/engine.py` puts this file's directory on sys.path, not the
+# repository root, so the sibling packages are not importable without help.
+# The Dockerfile's entrypoint invokes the module exactly that way.
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from data.tiles import list_tiles, read_tile
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -728,7 +738,7 @@ class OSPEngine:
         Process all .npy tiles in a directory. Returns list of payloads.
         Writes each payload to {out_dir}/{scene_id}.json.
         """
-        tiles = sorted(Path(tiles_dir).glob("*.npy"))
+        tiles = list_tiles(tiles_dir)
         if max_tiles:
             tiles = tiles[:max_tiles]
 
@@ -744,7 +754,7 @@ class OSPEngine:
 
         payloads = []
         for i, tp in enumerate(tiles):
-            arr = np.load(str(tp))
+            arr = read_tile(tp)
             fp  = footprints[i] if footprints else None
             p   = self.run_tile(arr, scene_id=tp.stem, footprint=fp)
             payloads.append(p)
@@ -823,7 +833,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="OSP on-board inference engine")
     parser.add_argument("--model",  required=True, help="Path to INT8 ONNX model")
-    parser.add_argument("--tiles",  required=True, help="Dir of .npy tiles")
+    parser.add_argument("--tiles",  required=True,
+                        help="Dir of tiles (.npy 6-band, or .png/.jpg RGB)")
     parser.add_argument("--max",    type=int,       help="Limit number of tiles")
     parser.add_argument("--out",    default="/output", help="Output dir for JSON")
     parser.add_argument("--platform", help="Platform profile key (moi-1a | skyroot-oam)")

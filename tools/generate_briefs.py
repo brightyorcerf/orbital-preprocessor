@@ -57,6 +57,8 @@ import numpy as np
 # Run as a script from anywhere: put the repository root on the import path.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from data.tiles import list_tiles, read_tile
+
 log = logging.getLogger("generate_briefs")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
@@ -235,7 +237,7 @@ def main() -> None:
     )
 
     # ── Tile selection ────────────────────────────────────────────────────────
-    tiles = sorted(Path(args.tiles).glob("*.npy"))
+    tiles = list_tiles(args.tiles)
     if not tiles:
         raise SystemExit(f"No .npy tiles in {args.tiles}")
 
@@ -268,7 +270,7 @@ def main() -> None:
         subpoint = propagator.at(capture_time)
         footprint = footprint_for(subpoint)
 
-        tile = np.load(str(tile_path))
+        tile = read_tile(tile_path)
         payload = engine.run_tile(
             tile,
             scene_id=tile_path.stem.replace("osp_synth", "OSP"),

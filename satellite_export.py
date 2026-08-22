@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from data.tiles import list_tiles, read_tile
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -64,7 +65,7 @@ class TileCalibrationReader:
 
     def __init__(self, calib_dir: str, input_name: str, max_samples: int):
         self.input_name = input_name
-        self.tiles = sorted(Path(calib_dir).glob("*.npy"))[:max_samples]
+        self.tiles = list_tiles(calib_dir)[:max_samples]
         if not self.tiles:
             raise FileNotFoundError(
                 f"No .npy tiles found in {calib_dir}. Generate them first:\n"
@@ -86,7 +87,7 @@ class TileCalibrationReader:
         # occurs in production.
         import cv2
 
-        tile = np.load(str(path)).astype(np.float32)
+        tile = read_tile(path)
         h, w = tile.shape[:2]
         if h != INPUT_SIZE or w != INPUT_SIZE:
             tile = np.stack(

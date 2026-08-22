@@ -55,7 +55,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Default: run batch inference on /input → /output
 # Override CMD to run specific steps:
 #   docker run ... osp:latest python train.py --quick
-#   docker run ... osp:latest python model/export.py --weights best.pt
+#   docker run ... osp:latest python satellite_export.py --weights best.pt
 #   docker run ... osp:latest streamlit run ground/dashboard.py
 
 CMD ["python", "inference/engine.py", "--model", "/app/model/artifacts/osp_yolov8n_int8.onnx", "--tiles", "/input"]

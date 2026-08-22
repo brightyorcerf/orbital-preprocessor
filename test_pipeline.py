@@ -910,6 +910,120 @@ def test_trained_detector():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+
+@run_test("T14  Tile storage formats agree (data/tiles.py)")
+def test_tile_format_equivalence():
+    """A tile must read identically whether stored as .npy or as RGB.
+
+    Every consumer in the repo — trainer, evaluator, INT8 calibrator,
+    quantization benchmark, inference engine, brief generator — reads tiles
+    through `data.tiles.read_tile`. Before that existed each opened tiles with
+    its own `glob("*.npy")` + `np.load`, so introducing the RGB storage form
+    broke five of the six silently: they raised "no tiles found" or, worse,
+    scored an empty directory as a detector that found nothing.
+
+    This test fails if any of them regresses to reading `.npy` directly, and it
+    fails if the two storage paths ever stop agreeing.
+    """
+    import tempfile
+    import cv2
+    from data.tiles import list_tiles, read_tile, TILE_SUFFIXES
+    from data.synthetic_bands import rgb_to_6band
+
+    rng = np.random.default_rng(7)
+    rgb = rng.integers(0, 255, (64, 64, 3), dtype=np.uint8)
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        # Same source pixels, both storage forms. PNG is lossless, so the two
+        # must agree exactly; JPEG would only agree approximately.
+        np.save(td / "a.npy", rgb_to_6band(rgb))
+        cv2.imwrite(str(td / "b.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+
+        found = list_tiles(td)
+        assert len(found) == 2, f"list_tiles found {len(found)}, expected 2"
+
+        from_npy = read_tile(td / "a.npy")
+        from_png = read_tile(td / "b.png")
+
+        assert from_npy.shape == from_png.shape == (64, 64, 6)
+        assert from_npy.dtype == from_png.dtype == np.float32
+        assert np.allclose(from_npy, from_png, atol=1e-6), (
+            f"storage forms disagree, max delta "
+            f"{np.abs(from_npy - from_png).max():.2e}"
+        )
+
+        # An undecodable file must raise, never return a blank tile: a silently
+        # zero-filled tile scores as "found nothing", which is indistinguishable
+        # from a genuinely empty scene and corrupts accuracy numbers invisibly.
+        (td / "c.png").write_bytes(b"not a png")
+        try:
+            read_tile(td / "c.png")
+            raise AssertionError("read_tile returned instead of raising on a corrupt file")
+        except ValueError:
+            pass
+
+    return f"npy==png exact, {len(TILE_SUFFIXES)} suffixes, corrupt file raises"
+
+
+@run_test("T15  DOTA label conversion (data/dota_prep.py)")
+def test_dota_label_conversion():
+    """Both DOTA label dialects map onto OSP's four classes correctly.
+
+    DOTA ships two annotation formats and OSP must read either: the original
+    (absolute pixel quads, category *names*, `imagesource:`/`gsd:` headers) and
+    the Ultralytics repackaging (normalised quads, category *indices*). The
+    index dialect is the dangerous one — a wrong offset in the class table
+    silently trains ships as harbors, and every metric still looks plausible.
+
+    The strings below are copied from real DOTA-v1.0 files, not invented.
+    """
+    import tempfile
+    from data.dota_prep import (
+        parse_dota_label, quad_to_aabb, quad_area, OSP_CLASSES,
+    )
+
+    original = (
+        "imagesource:GoogleEarth\n"
+        "gsd:0.255599276123\n"
+        "487 266 529 296 492 350 453 319 harbor 0\n"
+        "100 100 200 100 200 200 100 200 large-vehicle 0\n"   # not an OSP class
+    )
+    # Ultralytics DOTAv1 indices: 1 = ship, 7 = harbor, 9 = large vehicle.
+    ultralytics = (
+        "7 0.150588 0.102544 0.163575 0.114109 0.152134 0.134927 0.140074 0.122976\n"
+        "1 0.679344 0.871627 0.665739 0.880493 0.658009 0.864688 0.671923 0.855436\n"
+        "9 0.056586 0.824595 0.056895 0.810332 0.067408 0.810332 0.067099 0.824595\n"
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        (td / "o.txt").write_text(original)
+        (td / "u.txt").write_text(ultralytics)
+
+        got_o = parse_dota_label(td / "o.txt", 3000, 3000)
+        got_u = parse_dota_label(td / "u.txt", 4000, 3000)
+
+    assert [OSP_CLASSES[c] for c, _ in got_o] == ["harbor"], \
+        f"original dialect gave {[OSP_CLASSES[c] for c, _ in got_o]}"
+    assert [OSP_CLASSES[c] for c, _ in got_u] == ["harbor", "ship"], \
+        f"ultralytics dialect gave {[OSP_CLASSES[c] for c, _ in got_u]}"
+
+    # Denormalisation must scale by image size, not tile size.
+    assert abs(got_u[0][1][0][0] - 0.150588 * 4000) < 0.5, "x denormalisation wrong"
+    assert abs(got_u[0][1][0][1] - 0.102544 * 3000) < 0.5, "y denormalisation wrong"
+
+    # A 45-degree square's enclosing box has exactly twice its area. This is the
+    # cost of flattening DOTA's oriented boxes, and dota_prep reports it rather
+    # than absorbing it quietly.
+    diamond = np.array([[50, 0], [100, 50], [50, 100], [0, 50]], dtype=np.float32)
+    x1, y1, x2, y2 = quad_to_aabb(diamond)
+    inflation = ((x2 - x1) * (y2 - y1)) / quad_area(diamond)
+    assert abs(inflation - 2.0) < 1e-3, f"45-degree inflation = {inflation:.4f}, expected 2.0"
+
+    return f"both dialects map correctly, 45-degree AABB inflation = {inflation:.2f}x"
+
+
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -932,6 +1046,8 @@ if __name__ == "__main__":
         test_full_pipeline,
         test_training_corpus,
         test_trained_detector,
+        test_tile_format_equivalence,
+        test_dota_label_conversion,
     ]
 
     for t in tests:
