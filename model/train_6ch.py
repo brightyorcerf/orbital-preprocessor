@@ -606,6 +606,12 @@ def parse_args() -> argparse.Namespace:
                         "always scored once at the end; this only caps the in-loop "
                         "signal used for checkpoint selection, which on CPU would "
                         "otherwise cost more than the training step it is judging.")
+    p.add_argument("--max-hours", type=float, default=0.0,
+                   help="Wall-clock budget. 0 disables it. When the next epoch "
+                        "would not finish inside the budget, training stops "
+                        "cleanly and everything downstream still runs. Meant for "
+                        "hosted runners that kill the session at a hard limit "
+                        "and discard the outputs when they do.")
     p.add_argument("--metrics-out", default="model/artifacts/train_metrics.json")
     return p.parse_args()
 
@@ -711,6 +717,8 @@ def main() -> None:
     history = []
     global_epoch = 0
     best_map, best_epoch = -1.0, -1
+    budget_s = args.max_hours * 3600 if args.max_hours > 0 else float("inf")
+    stopped_early = False
     out_path = Path(args.out)
     t0 = time.time()
 
@@ -720,7 +728,7 @@ def main() -> None:
     ]
 
     for phase_name, n_epochs, lr, freeze in phases:
-        if n_epochs <= 0:
+        if n_epochs <= 0 or stopped_early:
             continue
 
         n_train_p, n_total_p = set_trainable(model, freeze_backbone=freeze)
@@ -783,6 +791,24 @@ def main() -> None:
                 save_checkpoint(scored, out_path, N_CLASSES, len(history), fitness)
                 log.info(f"  ↳ new best (mAP50-95 {m['map50_95']:.4f}) → {out_path}")
 
+            # Stop before overrunning the budget, not after. A hosted runner
+            # that hits its own limit mid-epoch kills the process, and the
+            # export, scoring and packaging that were supposed to follow never
+            # run — so the whole session produces nothing. Stopping one epoch
+            # short costs one epoch; being killed costs the run.
+            if budget_s != float("inf"):
+                spent = time.time() - t0
+                mean_epoch = spent / max(1, len(history))
+                if spent + mean_epoch > budget_s:
+                    log.warning(
+                        f"Wall-clock budget reached: {spent / 3600:.2f} h of "
+                        f"{args.max_hours:.2f} h used, and another epoch averages "
+                        f"{mean_epoch / 60:.1f} min. Stopping after {len(history)} "
+                        f"epochs so the rest of the pipeline still runs."
+                    )
+                    stopped_early = True
+                    break
+
     elapsed = time.time() - t0
 
     if best_epoch < 0:
@@ -807,6 +833,8 @@ def main() -> None:
         "best_epoch_subset": best,
         "final_full_val": final,
         "epochs_total": len(history),
+        "epochs_requested": args.epochs_phase1 + args.epochs,
+        "stopped_early_on_budget": stopped_early,
         "train_tiles": len(train_ds),
         "device": device,
         "amp": amp_on,
