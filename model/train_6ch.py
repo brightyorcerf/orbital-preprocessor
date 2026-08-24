@@ -791,6 +791,25 @@ def main() -> None:
                 save_checkpoint(scored, out_path, N_CLASSES, len(history), fitness)
                 log.info(f"  ↳ new best (mAP50-95 {m['map50_95']:.4f}) → {out_path}")
 
+            # Persist the history every epoch, not only on the way out. The
+            # checkpoint above is already written incrementally, but the metrics
+            # were not: a session killed during the final full-val pass would
+            # leave a perfectly good model with no record of how it got there,
+            # and the epoch curve is not recoverable from the weights. Replaced
+            # by the complete summary below if the run reaches the end.
+            metrics_path = Path(args.metrics_out)
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            metrics_path.write_text(json.dumps({
+                "status": "in_progress",
+                "epochs_total": len(history),
+                "epochs_requested": args.epochs_phase1 + args.epochs,
+                "train_tiles": len(train_ds),
+                "device": device,
+                "elapsed_s": round(time.time() - t0, 1),
+                "checkpoint": str(out_path),
+                "history": history,
+            }, indent=2))
+
             # Stop before overrunning the budget, not after. A hosted runner
             # that hits its own limit mid-epoch kills the process, and the
             # export, scoring and packaging that were supposed to follow never
@@ -830,6 +849,7 @@ def main() -> None:
         f"mAP50 {final['map50']:.4f} mAP50-95 {final['map50_95']:.4f}"
     )
     summary = {
+        "status": "complete",
         "best_epoch_subset": best,
         "final_full_val": final,
         "epochs_total": len(history),
