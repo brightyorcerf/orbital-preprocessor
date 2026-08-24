@@ -1,0 +1,28 @@
+# requirements-inference.txt
+# ──────────────────────────
+# What the flight payload runs, and nothing else.
+#
+# requirements.txt is the development manifest: it pulls torch, ultralytics,
+# faiss and sentence-transformers because a workstation has to train the model,
+# perform the stem surgery and export it. The payload does none of that. It
+# loads an already-quantised ONNX graph and runs it, so the entire training
+# stack is dead weight in orbit.
+#
+# Concretely: the previous single-manifest image pulled 3.8 GB of wheels
+# (torch 527 MB, cuBLAS 423 MB, cuDNN 366 MB, cuFFT 214 MB, ...) for a ~10 GB
+# image, on a container whose own header specifies a 4 GB VRAM target. It also
+# installed onnxruntime-gpu and then CPU onnxruntime over the top of it, and
+# scipy, which nothing in the repository imports.
+#
+# Every module reachable from inference/engine.py is covered below. Verified by
+# building --target payload and regenerating data/briefs/ inside it:
+#   python tools/verify_docker_repro.py
+
+numpy>=1.24,<2.0
+opencv-python-headless>=4.8,<5.0   # cv2 — engine, preprocess, tile decode
+protobuf>=5.29,<6.0                # inference/osp_pb2.py gencode floor
+sgp4>=2.23,<3.0                    # orbital/: propagation behind each footprint
+
+# onnxruntime itself is installed by the Dockerfile, not pinned here, so the
+# CPU and CUDA builds can be selected per image without editing this file.
+# See the ONNX_RUNTIME build arg.

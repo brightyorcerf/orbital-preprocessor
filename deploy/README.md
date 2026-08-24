@@ -24,16 +24,27 @@ docker run --rm -p 8501:8501 osp-dashboard
 curl -s localhost:8501/_stcore/health    # -> ok
 ```
 
-## Hugging Face Space (Docker SDK)
+## Hugging Face Space (Docker SDK) — the deployment target
 
-Deterministic, because the Space builds this exact Dockerfile.
+Deterministic, because the Space builds this exact Dockerfile rather than
+resolving dependencies on its own.
 
-1. Create a Space, SDK **Docker**, hardware **CPU basic (free)**.
-2. Point it at this repository, or push the repo to the Space remote.
-3. Add `dockerfile_path: deploy/Dockerfile` to the Space's `README.md`
-   front matter.
-4. Spaces route to port **7860**; the image reads `PORT`, so set `PORT=7860`
-   in the Space variables. No code change needed.
+1. Create a Space: SDK **Docker**, hardware **CPU basic (free)**.
+2. Copy `deploy/space.README.md` to the Space repository's `README.md`. Its
+   front matter carries `sdk: docker`, `dockerfile_path: deploy/Dockerfile` and
+   `app_port: 8501`, which is the port this image already listens on, so there
+   is nothing further to configure.
+3. Push this repository to the Space remote:
+
+   ```bash
+   git remote add space https://huggingface.co/spaces/<user>/osp-command-centre
+   git push space main
+   ```
+
+4. Leave the Space's variables and secrets empty. See the note on keys below.
+
+The image reads `PORT`, so the same build also runs anywhere that injects one
+(Cloud Run, Fly) without an edit.
 
 ## Streamlit Community Cloud
 

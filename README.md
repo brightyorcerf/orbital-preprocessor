@@ -264,7 +264,7 @@ This matters because an earlier version of this README confidently advertised "8
 
 The 11-point drop at IoU 0.5 and 31-point drop at strict IoU is what replacing drawn primitives with photographed scenes costs. The synthetic score was not wrong, it was measuring the wrong thing.
 
-Per-class figures are shown because a composite score can hide one dead class behind three healthy ones, and here it would: **storage-tank recall is 0.653** at INT8 against precision of 0.936. The model is not confusing storage tanks with something else, it is failing to find them — 3,610 predictions against 5,177 ground-truth instances. Circular tanks in the synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the axis-aligned box conversion (mean 1.73x area inflation, see `docs/dota/prep_manifest.json`) hurts tightly-packed tank farms more than it hurts isolated aircraft. That class is the honest weak point of this detector.
+Per-class figures are shown because a composite score can hide one dead class behind three healthy ones, and here it would: **storage-tank recall is 0.653** at INT8 against precision of 0.936. The model is not confusing storage tanks with something else, it is failing to find them — 3,610 predictions against 5,177 ground-truth instances. Circular tanks in the synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the axis-aligned box conversion (mean 1.73x area inflation, see `prep_manifest.json`) hurts tightly-packed tank farms more than it hurts isolated aircraft. That class is the honest weak point of this detector.
 
 Quantization costs **0.9 points at IoU 0.5 and 3.2 points at strict IoU**. On the synthetic corpus INT8 appeared to *beat* FP32 (0.993 vs 0.992), which was noise on a corpus too easy to separate the two; on real imagery the cost is visible and consistently in the expected direction.
 
@@ -487,7 +487,11 @@ python tools/verify_docker_repro.py --check-only   # prerequisites, no build
 python tools/verify_docker_repro.py                # build, regenerate, diff
 ```
 
-The two inputs stay out of git and out of the image: the 3.7 MB INT8 graph and the 3,677-tile held-out split are both reproducible from the notebook, so they are bind-mounted read only at run time. The claim being verified is therefore *given the artifact and the split, the container regenerates `data/briefs/` byte for byte*, not *a clean clone regenerates it from nothing*. Every field is compared except `meta.inference_ms`, which is wall-clock timing and differs between any two runs by construction.
+The two inputs stay out of git and out of the image: the 3.7 MB INT8 graph and the 3,677-tile held-out split are both reproducible from the notebook, so they are bind-mounted read only at run time. The claim being verified is therefore *given the artifact and the split, the container regenerates `data/briefs/`*, not *a clean clone regenerates it from nothing*. `meta.inference_ms` is excluded, being wall-clock.
+
+The result is worth stating precisely, because it is not a clean pass. On the host, regeneration reproduces the committed corpus 20/20. In the container it reproduces 7/20 exactly; the other 13 carry the same tiles and the same detection counts, with confidences differing by at most one step on the INT8 score ladder (about 0.037). Bisecting it: the ONNX graph returns a bit-identical tensor in both environments, and so does the JPEG decode, but the derived 6-band tile does not. `rgb_to_6band()` builds the synthetic B11/B12 bands with `cv2.resize`, and `INTER_LINEAR` dispatches a different SIMD kernel against the container's CPU feature set. The disagreement is around 1e-8 relative, which against an FP32 detector would not be observable. Against an INT8 one it is: quantisation snaps that hair's width onto the next rung of a discrete score ladder, and a detection sitting on the 0.35 confidence threshold can cross it.
+
+That is a property of quantised inference worth knowing rather than a defect in the container, so the check enforces structural agreement and reports the numeric drift with its cause. `--strict` demands bit-equality and currently fails, which is the honest state of it.
 
 Inspect the orbital layer directly:
 
