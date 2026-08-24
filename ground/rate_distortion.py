@@ -466,8 +466,12 @@ def main() -> int:
         return 1
 
     tiles = list_tiles(args.tiles)
-    if args.limit:
-        tiles = tiles[:args.limit]
+    if args.limit and args.limit < len(tiles):
+        # Even stride, not a prefix — see the note in model/evaluate_detector.py.
+        # Tile names sort by source image, so a prefix silently drops whole
+        # classes and makes the curve unrepresentative of the corpus.
+        step = len(tiles) / args.limit
+        tiles = [tiles[int(i * step)] for i in range(args.limit)]
     if not tiles:
         log.error(f"No tiles in {args.tiles}")
         return 1

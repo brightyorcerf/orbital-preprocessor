@@ -303,8 +303,14 @@ def evaluate(
     """
     images_dir, labels_dir = Path(images_dir), Path(labels_dir)
     tiles = list_tiles(images_dir)
-    if limit:
-        tiles = tiles[:limit]
+    if limit and limit < len(tiles):
+        # Sample evenly across the split, never a prefix. Tile names sort by
+        # source image, so a prefix is a contiguous run of a handful of scenes:
+        # on the DOTA val split the first 1,000 tiles hold 16,433 ships and
+        # *zero* storage-tanks. A stride keeps every region of the split
+        # represented and stays deterministic, which a random sample would not.
+        step = len(tiles) / limit
+        tiles = [tiles[int(i * step)] for i in range(limit)]
     if not tiles:
         raise FileNotFoundError(f"No tiles in {images_dir}")
 

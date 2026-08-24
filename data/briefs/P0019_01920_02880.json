@@ -1,0 +1,60 @@
+{
+  "scene_id": "P0019_01920_02880",
+  "timestamp_utc": "2026-08-21T05:46:17.067Z",
+  "tile_footprint": {
+    "lat_min": 9.77887,
+    "lat_max": 9.836426,
+    "lon_min": 72.403977,
+    "lon_max": 72.462388
+  },
+  "cloud_cover": 0.001,
+  "anomaly_count": 2,
+  "anomalies": [
+    {
+      "type": "harbor",
+      "lat_lon": [
+        9.830491,
+        72.429304
+      ],
+      "conf": 0.5,
+      "bbox_px": [
+        214,
+        5,
+        341,
+        127
+      ]
+    },
+    {
+      "type": "harbor",
+      "lat_lon": [
+        9.822532,
+        72.451162
+      ],
+      "conf": 0.3886,
+      "bbox_px": [
+        487,
+        80,
+        547,
+        229
+      ]
+    }
+  ],
+  "meta": {
+    "model_version": "osp-yolov8n-int8-v1",
+    "inference_ms": 49.7,
+    "compression_ratio": 19980
+  },
+  "provenance": {
+    "pixels": "real \u2014 DOTA-v1.0 aerial imagery (aerial, roughly 0.1-1 m \u2014 NOT the 10 m Sentinel-2 GSD the orbital layer models. Briefs generated from these tiles must not inherit Sentinel-2 footprint fields.)",
+    "detections": "measured \u2014 osp_yolov8n_int8.onnx INT8 ONNX inference",
+    "geolocation": "approximate \u2014 SGP4 propagation of SENTINEL-2C (NORAD 60989) gives a real ground track, but the footprint box assumes Sentinel-2's 10 m GSD, not this tile's actual aerial GSD. Do not treat as measured geolocation.",
+    "source_tile": "P0019_01920_02880.jpg",
+    "subpoint": {
+      "lat": 9.807648,
+      "lon": 72.433182,
+      "alt_km": 790.805
+    },
+    "gsd_m": 10.0,
+    "tile_km": 6.4
+  }
+}

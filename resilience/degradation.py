@@ -157,13 +157,20 @@ def main() -> int:
                     help="random draws per flip count (default 3)")
     ap.add_argument("--flips", type=int, nargs="*", default=list(DEFAULT_FLIPS))
     ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--images", default=str(VAL_IMG),
+                    help="validation tiles dir (default: synthetic split)")
+    ap.add_argument("--labels", default=str(VAL_LBL),
+                    help="validation labels dir (default: synthetic split)")
     args = ap.parse_args()
+
+    val_img, val_lbl = Path(args.images), Path(args.labels)
+    globals()["VAL_IMG"], globals()["VAL_LBL"] = val_img, val_lbl
 
     if not MODEL.exists():
         print(f"No INT8 artifact at {MODEL}. Run: python train.py --export")
         return 1
-    if not VAL_IMG.exists():
-        print(f"No validation split at {VAL_IMG}. Run: python data/synth_demo.py")
+    if not val_img.exists():
+        print(f"No validation split at {val_img}. Run: python data/synth_demo.py")
         return 1
 
     workdir = Path(tempfile.mkdtemp(prefix="osp_seu_"))

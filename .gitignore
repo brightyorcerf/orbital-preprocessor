@@ -77,3 +77,10 @@ yolov8n.pt
 # Local venv
 .venv/
 *.data
+
+# Real DOTA artifacts pulled down from the Kaggle training run.
+# The zip is 397 MB and the val split is 3,677 tiles: both are reproducible
+# from tools/kaggle_train_dota.ipynb, so they stay out of the history.
+osp_dota_artifacts.zip
+val/
+model/artifacts_synthetic_backup/

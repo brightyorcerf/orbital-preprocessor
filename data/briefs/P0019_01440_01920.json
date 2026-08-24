@@ -1,0 +1,46 @@
+{
+  "scene_id": "P0019_01440_01920",
+  "timestamp_utc": "2026-08-21T05:46:11.378Z",
+  "tile_footprint": {
+    "lat_min": 10.116057,
+    "lat_max": 10.173614,
+    "lon_min": 72.47975,
+    "lon_max": 72.538221
+  },
+  "cloud_cover": 0.0,
+  "anomaly_count": 1,
+  "anomalies": [
+    {
+      "type": "harbor",
+      "lat_lon": [
+        10.120374,
+        72.485323
+      ],
+      "conf": 0.5743,
+      "bbox_px": [
+        48,
+        548,
+        74,
+        636
+      ]
+    }
+  ],
+  "meta": {
+    "model_version": "osp-yolov8n-int8-v1",
+    "inference_ms": 58.5,
+    "compression_ratio": 24212
+  },
+  "provenance": {
+    "pixels": "real \u2014 DOTA-v1.0 aerial imagery (aerial, roughly 0.1-1 m \u2014 NOT the 10 m Sentinel-2 GSD the orbital layer models. Briefs generated from these tiles must not inherit Sentinel-2 footprint fields.)",
+    "detections": "measured \u2014 osp_yolov8n_int8.onnx INT8 ONNX inference",
+    "geolocation": "approximate \u2014 SGP4 propagation of SENTINEL-2C (NORAD 60989) gives a real ground track, but the footprint box assumes Sentinel-2's 10 m GSD, not this tile's actual aerial GSD. Do not treat as measured geolocation.",
+    "source_tile": "P0019_01440_01920.jpg",
+    "subpoint": {
+      "lat": 10.144836,
+      "lon": 72.508985,
+      "alt_km": 790.793
+    },
+    "gsd_m": 10.0,
+    "tile_km": 6.4
+  }
+}

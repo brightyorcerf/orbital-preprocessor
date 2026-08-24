@@ -1,0 +1,56 @@
+{
+  "generator": "data/dota_prep.py",
+  "source": "/kaggle/temp/dota/DOTAv1",
+  "classes": [
+    "ship",
+    "airplane",
+    "storage-tank",
+    "harbor"
+  ],
+  "tile": 640,
+  "stride": 480,
+  "min_visible": 0.35,
+  "min_px": 6,
+  "neg_ratio": 0.1,
+  "jpeg_quality": 95,
+  "seed": 1337,
+  "limit": null,
+  "provenance": {
+    "pixels": "real \u2014 DOTA-v1.0 aerial imagery",
+    "bands": "derived \u2014 rgb_to_6band() linear map over RGB; NOT measured multispectral. The NIR/SWIR planes carry no information the visible bands do not.",
+    "boxes": "real \u2014 DOTA human annotations, oriented quads flattened to axis-aligned boxes (see aabb_mean_inflation for the cost)",
+    "gsd": "aerial, roughly 0.1-1 m \u2014 NOT the 10 m Sentinel-2 GSD the orbital layer models. Briefs generated from these tiles must not inherit Sentinel-2 footprint fields."
+  },
+  "splits": {
+    "train": {
+      "source_images": 1411,
+      "tiles_written": 11046,
+      "tiles_empty": 1104,
+      "instances": 100844,
+      "per_class": {
+        "ship": 60322,
+        "airplane": 16951,
+        "storage-tank": 10162,
+        "harbor": 13409
+      },
+      "skipped_unreadable": 0,
+      "aabb_mean_inflation": 1.7947,
+      "aabb_p95_inflation": 2.9291
+    },
+    "val": {
+      "source_images": 458,
+      "tiles_written": 3677,
+      "tiles_empty": 367,
+      "instances": 34918,
+      "per_class": {
+        "ship": 19651,
+        "airplane": 5464,
+        "storage-tank": 5177,
+        "harbor": 4626
+      },
+      "skipped_unreadable": 0,
+      "aabb_mean_inflation": 1.729,
+      "aabb_p95_inflation": 2.8936
+    }
+  }
+}

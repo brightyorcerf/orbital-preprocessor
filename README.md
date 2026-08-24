@@ -6,13 +6,13 @@ A spacecraft decides what to downlink on its next contact, under real orbital an
 
 [![tests](https://github.com/brightyorcerf/orbital-preprocessor/actions/workflows/tests.yml/badge.svg)](https://github.com/brightyorcerf/orbital-preprocessor/actions/workflows/tests.yml)
 
-`90% of a corpus's objects: 14.8 KB as briefs, 347 KB as JPEG, 66.5 MB as raw` · `one contact buys 1,918 briefs or 0.4 raw tiles`
+`86% of a corpus's objects: 0.89 MB as briefs, 2.37 GB as raw, unreachable by JPEG` · `one contact buys 1,343 briefs or 0.5 raw tiles`
 
 `SGP4-propagated contact windows` · `10.2 min pass, computed not assumed` · `frames validated to 38 m against Skyfield`
 
 `LLM in control loop: False, enforced by the interface` · `every declared fallback has a test that fires it`
 
-`3.69 MB INT8 detector` · `62 ms per tile` · `226-byte briefs` · `synthetic pixels, and the repo says so`
+`3.69 MB INT8 detector` · `51 ms per tile` · `155-byte briefs` · `0.880 mAP@0.5 on 3,677 real DOTA tiles`
 
 ![OSP command centre](img.jpg)
 
@@ -138,9 +138,9 @@ One result from the real corpus is worth noting because nobody chose it: all fiv
 
 ### 3. The compression claim is a curve, not a ratio
 
-The argument for this whole architecture is that a brief beats an image. Until recently that was carried by a single number — 43,497:1 — and a single number cannot carry it.
+The argument for this whole architecture is that a brief beats an image. Until recently that was carried by a single number — 43,497:1, now 63,279:1 on real imagery — and a single number cannot carry it.
 
-The brief corpus shows why. Its per-scene ratios range from 6,798:1 to 31,710:1, and the largest belongs to `OSP_000320`, a brief containing **zero detections**. An empty brief is nearly free, so the headline figure was partly measuring how empty the scenes happened to be. That is a property of the dataset, not of the method.
+The brief corpus shows why. Its per-scene ratios range from 19,582:1 to 31,108:1, and the largest belongs to `P0019_01920_00480`, a brief containing **zero detections**. An empty brief is nearly free, so the headline figure was partly measuring how empty the scenes happened to be. That is a property of the dataset, not of the method. The effect survived the move to real imagery: the widest and narrowest ratios in the DOTA brief corpus are still separated by an empty scene at one end and a two-object scene at the other.
 
 A ratio also answers the wrong question. An operator does not ask how small a brief is. They ask: *given the bytes this pass affords, how much of what is down there will I know about?*
 
@@ -150,21 +150,29 @@ A ratio also answers the wrong question. An operator does not ask how small a br
 
 That denominator is the entire experiment. Score only the tiles that were delivered and every strategy trends to 1.0, which is exactly the flattering non-result this replaces.
 
+Priced over **1,000 held-out DOTA tiles, 9,472 labelled objects**, sampled at even stride across the val split so all four classes appear in corpus proportion. Contact budget is a `skyroot-oam` pass: 32.0 kbps x 5.0 min = 1,200,000 B.
+
 | Strategy | Bytes/tile | Recall | Precision | Tiles per contact |
 | :--- | ---: | ---: | ---: | ---: |
-| raw, lossless | 2,772,343 | 0.983 | 1.000 | 0.4 |
-| JPEG q30 | 15,544 | 0.975 | 0.959 | 77 |
-| JPEG q2 | 7,973 | 0.562 | 0.279 | 151 |
-| brief @ conf 0.20 | 626 | 0.983 | 1.000 | 1,918 |
-| brief @ conf 0.90 | 419 | 0.405 | 1.000 | 2,866 |
+| raw, lossless | 2,366,944 | 0.862 | 0.920 | 0.5 |
+| JPEG q30 | 26,079 | 0.814 | 0.925 | 46 |
+| JPEG q2 | 8,291 | 0.507 | 0.846 | 145 |
+| brief @ conf 0.20 | 951 | 0.893 | 0.873 | 1,262 |
+| brief @ conf 0.35 | 894 | 0.862 | 0.920 | 1,343 |
+| brief @ conf 0.65 | 755 | 0.707 | 0.974 | 1,590 |
+| brief @ conf 0.80 | 273 | **0.000** | **0.000** | 4,396 |
 
-To put 90% of the corpus's objects in front of a ground analyst costs **66.5 MB** as raw tiles, **347 KB** as JPEG, or **14.8 KB** as briefs.
+**The brief at conf 0.35 ties raw lossless exactly** — 0.862 recall, 0.920 precision — for **1/2,648th** of the bytes. Not approximately: the same numbers, because the brief *is* the raw tile's detection result at the deployed threshold, and the ground station runs the same detector either way. Reaching that recall costs **2.37 GB** as raw tiles or **0.89 MB** as briefs. JPEG never reaches it at any quality setting: it peaks at 0.828 recall at q75, for 53.3 MB.
 
-Two findings matter more than the headline gap.
+Three findings matter more than the headline gap.
 
-**Briefs are lossy, and the sweep shows where they break.** Raising the confidence threshold shrinks the brief and drops recall with it: 0.983 at 0.20, 0.876 at 0.80, and a collapse to 0.405 at 0.90. Precision stays at 1.000 throughout, so the failure mode is silent omission, not error — the worst kind, because nothing in the brief reveals it happened.
+**The detector has a confidence ceiling, and past it the brief goes silent.** At conf 0.80 the sweep emits **zero detections across all 9,472 objects** — not a degraded brief, an empty one, still costing 273 B/tile in envelope overhead. The maximum confidence this model produces anywhere is 0.683. The old synthetic detector still returned boxes at 0.90; this one does not, so any operator threshold above ~0.68 silently downlinks nothing. That is a hard operating-envelope constraint and the single most important number in this table.
 
-**JPEG fails in the opposite direction.** At q2 recall falls to 0.562, but precision falls further, to 0.279. Heavy compression does not merely hide objects; its artefacts make the detector hallucinate them. A ground station working from over-compressed imagery gets confident detections of things that are not there.
+**Briefs trade recall against precision, and neither is free.** Precision is no longer the flat 1.000 the synthetic corpus reported: it runs 0.754 at conf 0.05 up to 0.974 at conf 0.65, while recall falls 0.921 to 0.707 across the same span. The knee is at conf 0.35, which is where the deployed threshold already sits. The synthetic finding that briefs were lossless in precision was an artefact of a corpus where every object was a distinct geometric primitive.
+
+> **Retracted.** An earlier version of this section reported that heavy JPEG made the detector *hallucinate* — precision collapsing to 0.279 at q2 while recall fell to 0.562, so artefacts were manufacturing false objects. **That does not reproduce on real imagery.** At q2 on DOTA, recall falls to 0.507 but precision holds at 0.846, close to the raw baseline's 0.920 rather than collapsing. Heavy JPEG on real scenes hides objects; it does not invent them. The original result was a property of synthetic tiles, where compression artefacts on flat backgrounds resembled the drawn primitives the detector was trained on. Removed rather than restated.
+
+> **Sampling note.** `--limit` on this script and on `model/evaluate_detector.py` used to take the *first* N tiles. DOTA tile names sort by source image, so a prefix is a contiguous run of a few scenes: the first 1,000 tiles of this split hold 16,433 ships and **zero** storage-tanks. An earlier draft of this table was built that way and was wrong. Both tools now sample at even stride, which reproduces the corpus class balance to within one point per class.
 
 The comparison is set up to be unkind to OSP in three specific ways. Raw is priced as lossless PNG over six uint16 planes, not the 9.83 MB float32 array actually held in memory. Briefs are priced as minified JSON, when the protobuf encoding they really ship in is 2.4x smaller. And ground-side detection uses the same detector at the same threshold as onboard, so the pixel strategies are never handicapped by a weaker analyst.
 
@@ -173,7 +181,7 @@ JPEG is the fair lossy baseline here for a specific reason: the six bands are de
 What the curve cannot show is worth stating alongside it. Pixels can be re-analysed later, with a better model, for a question nobody has asked yet. A brief cannot. The plot measures one axis of value and the architecture trades away another.
 
 ```bash
-python ground/rate_distortion.py --tiles osp_dataset/images/val --labels osp_dataset/labels/val
+python ground/rate_distortion.py --tiles val/images --labels val/labels --limit 1000
 ```
 
 ### 4. The declared safety behaviours are executed, not just declared
@@ -224,7 +232,7 @@ No figure here was typed in by hand. Each one has a command that reproduces it, 
 - `MEASURED`: we measured it on real hardware
 - `DERIVED`: an engineering assumption, to be replaced when real specs exist
 
-This matters because an earlier version of this README confidently advertised "85,000:1 compression" and a "<3 MB INT8 model". Both were wrong. The first divided one tile's brief by an entire scene, a 324x coverage mismatch. The second had never been measured. The honest numbers are 43,497:1 and 3.69 MB, and the size target is recorded as missed rather than quietly restated.
+This matters because an earlier version of this README confidently advertised "85,000:1 compression" and a "<3 MB INT8 model". Both were wrong. The first divided one tile's brief by an entire scene, a 324x coverage mismatch. The second had never been measured. The honest numbers are 63,279:1 on the current DOTA brief corpus (43,497:1 on the synthetic one it replaced) and 3.69 MB, and the size target is recorded as missed rather than quietly restated.
 
 ---
 
@@ -232,28 +240,37 @@ This matters because an earlier version of this README confidently advertised "8
 
 ### Detection accuracy
 
-**Read the caveat before the table.** This detector is trained and scored entirely on imagery `data/synth_demo.py` draws: storage tanks are circles, airplanes are plus-signs, ships are rectangles. A network scoring 0.99 against that has learned to find the geometric primitives this repository drew for it. The number is real and it is close to meaningless as an accuracy estimate — it measures that the training pipeline produces a working detector, and nothing about performance on an actual scene.
+**These numbers are from real aerial imagery.** An earlier version of this section scored 0.992 against tiles `data/synth_demo.py` drew — storage tanks as circles, airplanes as plus-signs, ships as rectangles — and said plainly that the number was close to meaningless, that `data/dota_prep.py` and `tools/kaggle_train_dota.ipynb` existed to replace it, and that the numbers would drop when they did. They did drop. That was the point.
 
-Everything downstream inherits the doubt. The compression curve, the brief sizes and the scheduler priorities are all real *given* the detections; the detections are the weak link. `data/dota_prep.py` and `tools/kaggle_train_dota.ipynb` exist to replace this with real aerial imagery, and the numbers below will drop when they do. That drop is the point.
-
-80 held-out tiles, none seen during training. Scored through the deployed decision path: same NMS, same class map, same confidence threshold that flight code uses.
+**3,677 held-out tiles** from DOTA-v1.0, 34,918 labelled instances, none seen during training. Scored through the deployed decision path: same NMS, same class map, same confidence threshold that flight code uses.
 
 | | FP32 checkpoint | INT8 (what ships) |
 | :--- | ---: | ---: |
-| mAP@0.5 | 0.992 | 0.993 |
-| mAP@0.5:0.95 | 0.905 | 0.853 |
-| ship *(200 instances)* | 0.985 | 0.990 |
-| airplane *(48)* | 1.000 | 1.000 |
-| storage-tank *(116)* | 0.983 | 0.982 |
-| harbor *(24)* | 1.000 | 1.000 |
+| **mAP@0.5** | **0.889** | **0.880** |
+| **mAP@0.5:0.95** | **0.576** | **0.544** |
+| ship *(19,651 instances)* | 0.960 | 0.952 |
+| airplane *(5,464)* | 0.944 | 0.930 |
+| harbor *(4,626)* | 0.845 | 0.844 |
+| storage-tank *(5,177)* | 0.807 | 0.794 |
 
-Per-class figures are shown because a composite score can hide one dead class behind three healthy ones. Quantization costs essentially nothing at IoU 0.5 and about 5 points at strict IoU, that is, boxes survive, they just get slightly looser.
+**Before and after, on the same code path:**
 
-> Per-class figures are shown because a composite score can hide one dead class behind three healthy ones — but on this corpus all four classes are separable by shape alone, which is why three of them sit at or near 1.000.
+| | synthetic shapes | real DOTA aerial |
+| :--- | ---: | ---: |
+| mAP@0.5 | 0.993 | 0.880 |
+| mAP@0.5:0.95 | 0.853 | 0.544 |
+| held-out tiles | 80 | 3,677 |
+| labelled instances | 388 | 34,918 |
+
+The 11-point drop at IoU 0.5 and 31-point drop at strict IoU is what replacing drawn primitives with photographed scenes costs. The synthetic score was not wrong, it was measuring the wrong thing.
+
+Per-class figures are shown because a composite score can hide one dead class behind three healthy ones, and here it would: **storage-tank recall is 0.653** at INT8 against precision of 0.936. The model is not confusing storage tanks with something else, it is failing to find them — 3,610 predictions against 5,177 ground-truth instances. Circular tanks in the synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the axis-aligned box conversion (mean 1.73x area inflation, see `prep_manifest.json`) hurts tightly-packed tank farms more than it hurts isolated aircraft. That class is the honest weak point of this detector.
+
+Quantization costs **0.9 points at IoU 0.5 and 3.2 points at strict IoU**. On the synthetic corpus INT8 appeared to *beat* FP32 (0.993 vs 0.992), which was noise on a corpus too easy to separate the two; on real imagery the cost is visible and consistently in the expected direction.
 
 ```bash
 python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
-    --images osp_dataset/images/val --labels osp_dataset/labels/val
+    --images val/images --labels val/labels
 ```
 
 ### Quantization
@@ -261,12 +278,14 @@ python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
 | Metric | FP32 | INT8 | |
 | :--- | ---: | ---: | :--- |
 | Artifact size | 12.67 MB | 3.69 MB | 3.43x smaller |
-| Latency (CPU, 640², sequential) | 110.3 ms | 62.0 ms | 1.78x faster |
-| Mean relative divergence | n/a | 3.52 % | max 4.24 % |
+| Latency (CPU, 640², sequential) | 94.1 ms | 51.4 ms | 1.83x faster |
+| Mean relative divergence | n/a | 2.11 % | max 2.81 % |
+| **mAP@0.5** (3,677 real tiles) | **0.889** | **0.880** | costs 0.9 points |
+| **mAP@0.5:0.95** | **0.576** | **0.544** | costs 3.2 points |
 | Bitwise determinism | n/a | PASS | identical output across runs |
-| `skyroot-oam` 400 ms budget | Missed | Met | 6.5x margin |
+| `skyroot-oam` 400 ms budget | Met | Met | 7.8x margin |
 
-Static INT8 post-training quantization (QDQ, per-channel weights), calibrated on real 6-band tiles through the *same* preprocessing path as inference. Static rather than dynamic on purpose: dynamic quantization leaves most convolutions in FP32 and makes latency data-dependent, which breaks the determinism property the assurance story rests on.
+Static INT8 post-training quantization (QDQ, per-channel weights), calibrated on 32 DOTA validation tiles through the *same* preprocessing path as inference. Those 32 tiles are drawn from the same 3,677-tile split the INT8 accuracy above is scored on, so the INT8 column carries a small optimistic bias: roughly 0.9% of the scoring set was seen by the calibrator. Calibration fits activation ranges, not weights, so the effect is second-order, but it is not zero and the number is not independent. Static rather than dynamic on purpose: dynamic quantization leaves most convolutions in FP32 and makes latency data-dependent, which breaks the determinism property the assurance story rests on.
 
 Bitwise determinism is the quiet one worth noticing: the same input produces byte-identical output across runs, which is what makes an on-orbit result reproducible on the ground.
 
@@ -278,13 +297,16 @@ python model/benchmark_quantization.py --platform skyroot-oam
 
 The operating-point comparison lives above, under *The compression claim is a curve, not a ratio*. What remains here is the encoding cost alone, holding content fixed.
 
+Measured over the 20-brief DOTA corpus in `data/briefs/`:
+
 | Comparison | Ratio | Coverage |
 | :--- | ---: | :--- |
-| Protobuf brief (226 B) vs raw tile (9.83 MB) | 43,497:1 | same area, the honest per-tile figure |
-| Protobuf vs JSON | 2.4x | same content |
-| Scene-level, normalised | 1,432:1 | charges the scene all 324 briefs needed to cover it |
+| Protobuf brief (155 B mean) vs raw tile (9.83 MB) | 63,279:1 | same area, the honest per-tile figure |
+| Protobuf vs JSON | 2.66x | same content |
 
-Protobuf over JSON buys 2.4x on identical content, largely by sending a single enum byte where JSON spells out `"type": "storage-tank"` in full.
+Protobuf over JSON buys 2.66x on identical content (413 B → 155 B mean), largely by sending a single enum byte where JSON spells out `"type": "storage-tank"` in full.
+
+> **This ratio went up, and that is not good news.** The synthetic corpus reported 43,497:1; the DOTA corpus reports 63,279:1. Nothing about the encoding improved. These 20 tiles average 1.05 detections per brief where the synthetic scenes were denser, and an emptier brief is a smaller brief. This is the same artefact flagged under *The compression claim is a curve, not a ratio* — a headline ratio partly measures how empty the scenes happened to be, which is why the rate-distortion curve, not this number, carries the architectural argument. Reported here because it moved, not because it is evidence.
 
 These ratios describe a single brief against a single tile. They are not a measure of how much the ground learns per byte, and quoting them as though they were is the mistake the curve exists to correct.
 
@@ -312,9 +334,13 @@ Nothing enters those lines that was not already in R, G and B. A convolution's f
 
 Three of those components are the RGB the tile started as. The fourth is the resample applied to B11/B12 to imitate their 20 m native resolution, which is a spatial blur of a derived channel — still a function of RGB, still carrying nothing new.
 
-The measurement agrees. `resilience/degradation.py` kills each band in turn and rescores: dropping B11 costs 0.001 mAP, dropping B12 costs 0.011, and dropping **both costs nothing at all** (0.996 to 0.996). A control that blanks all six bands scores 0.000, so the harness is biting.
+On the synthetic corpus, the measurement agreed with the arithmetic: dropping B11 cost 0.001 mAP, dropping B12 cost 0.011, and dropping both cost nothing at all (0.996 to 0.996).
 
-An earlier version of this file read that null result as a limitation of the synthetic corpus, and said real imagery would settle it. **That was wrong.** DOTA is ordinary aerial photography, so bands derived from it are derived from RGB in exactly the same way and the null result reproduces unchanged. Real imagery fixes the pixels, the objects and the backgrounds. It does not fix this.
+**On real DOTA imagery, it does not reproduce as stated.** Re-measured on the trained DOTA detector (96 held-out tiles, stride-sampled): dropping B11 alone costs 0.003 mAP (0.836 → 0.833), dropping B12 alone *improves* it by 0.007 (noise, at this sample size), and dropping **both together costs 0.045 mAP** (0.836 → 0.791) — about 5.4% relative, not zero. A control that blanks all six bands scores 0.000, so the harness is biting.
+
+An earlier version of this file asserted that the zero-cost result "reproduces on DOTA." **That was written before any DOTA measurement existed, and it was wrong.** The arithmetic argument itself still holds — B11 and B12 are still a fixed linear map of R, G and B, so they still carry no information the visible bands did not already contain. What the real measurement shows is a *different* claim: an information-redundant channel is not the same as a channel the trained network is indifferent to losing. The stem-swap initialisation seeds the infrared channels from the mean of the RGB weights, and 32 epochs of real gradient descent evidently pulled B11 and B12 into carrying some of the load, however redundantly, rather than leaving them at zero-derivative no-ops. Losing two of six input channels at inference time is not the same operation as never having trained on them, and the two-channel joint effect is larger than either single-channel effect, which is itself a sign of a network exploiting some of the redundancy rather than none of it.
+
+Two more numbers complicate the picture further: on real imagery, dropping **B2 (blue) costs 0.066 mAP and B4 (red) costs 0.051** — both larger than the combined SWIR cost. The bands the network is least willing to lose are two of the three plain visible ones, not the derived infrared pair the architectural motivation was about. This is a real photograph corpus behaving like one: color content carries the signal, and the theoretically-redundant channels turn out to matter less than the non-derived ones, exactly as the arithmetic predicts, just not in the specific "SWIR is free to drop" shape the earlier synthetic-only measurement suggested.
 
 What would settle it is a sensor that measures short-wave infrared independently — and that is scarce for physical rather than editorial reasons. SWIR's wavelength is roughly three times visible light's, so the same aperture resolves roughly three times less detail, and silicon detectors cannot see SWIR at all. Sentinel-2 carries 10 m visible and 20 m SWIR; WorldView-3 resolves 31 cm panchromatic and about 3.7 m in SWIR. High-resolution short-wave infrared of ships is largely not a thing that exists to be downloaded.
 
@@ -322,34 +348,43 @@ So the honest position: the 6-channel stem is real engineering — channel surge
 
 ### Fault tolerance
 
-Single-event upsets injected uniformly into the 25,026,816 bits of quantised weight memory, scored over 24 held-out tiles, 3 random draws per point.
+Single-event upsets injected uniformly into the 25,026,816 bits of quantised weight memory, scored on the real DOTA detector over 96 held-out tiles (stride-sampled across the val split so all four classes are represented), 3 random draws per point.
 
 | Weight bits flipped | Share of weight memory | mAP@0.5 | Detections emitted |
 | ---: | ---: | ---: | ---: |
-| 0 | 0% | 0.996 | 119 |
-| 8,192 | 0.03% | 0.989 | 119 |
-| 32,768 | 0.13% | 0.981 | 116 |
-| 65,536 | 0.26% | 0.617 | 98 |
-| 131,072 | 0.52% | 0.259 | 317 |
-| 262,144 | 1.05% | 0.003 | 754 |
-| 1,048,576 | 4.19% | 0.000 | 6,573 |
+| 0 | 0% | 0.836 | 856 |
+| 256 | 0.001% | 0.843 | 851 |
+| 1,024 | 0.004% | 0.841 | 851 |
+| 4,096 | 0.016% | 0.819 | 834 |
+| 8,192 | 0.03% | 0.816 | 816 |
+| 16,384 | 0.07% | 0.801 | 643 |
+| 32,768 | 0.13% | 0.622 | 475 |
+| 65,536 | 0.26% | 0.338 | 225 |
+| 131,072 | 0.52% | 0.030 | 45 |
+| 262,144 | 1.05% | 0.000 | 1 |
+| 524,288 | 2.10% | 0.000 | 1,341 |
+| 1,048,576 | 4.19% | 0.000 | 16,548 |
 
-The detection count is the column to read. Past the knee the model does not go quiet, it goes loud: 55x more detections than baseline, essentially all of them wrong, with no error raised anywhere in the stack.
+The detection count is the column to read, and the real detector shows the same failure shape the synthetic one did, at a different scale. Below 0.13% of weight memory flipped the model is essentially undisturbed — mAP moves inside its own run-to-run noise band, and briefly *reads higher* than baseline at 256 flips. Between 0.13% and 0.52% it collapses (0.622 to 0.030), and past 1% it goes silent-then-loud: one detection at 262,144 flips, then 1,341 at 524,288, then **16,548** at 1,048,576 — 19x the clean baseline, essentially all of it wrong, with no error raised anywhere in the stack. That collapse-then-explosion shape reproduces on the real model; only the exact flip counts at the knee moved.
 
 This is a conditional measurement, not a radiation model. It says what survives given N flips and nothing whatsoever about how often N flips occur.
 
-Band dropout, same corpus:
+Band dropout, real DOTA detector, same 96-tile sample:
 
-| Band dropped | mAP@0.5 |
-| :--- | ---: |
-| none | 0.996 |
-| B11 | 0.996 |
-| B12 | 0.985 |
-| B11 + B12 | 0.996 |
-| all six *(control)* | 0.000 |
+| Band dropped | mAP@0.5 | Δ from clean |
+| :--- | ---: | ---: |
+| none | 0.836 | — |
+| B2 (blue) | 0.770 | −0.066 |
+| B3 (green) | 0.847 | +0.011 |
+| B4 (red) | 0.785 | −0.051 |
+| B8 (NIR, derived) | 0.844 | +0.008 |
+| B11 (SWIR-1, derived) | 0.833 | −0.003 |
+| B12 (SWIR-2, derived) | 0.843 | +0.007 |
+| B11 + B12 | 0.791 | −0.045 |
+| all six *(control)* | 0.000 | −0.836 |
 
 ```bash
-python resilience/degradation.py
+python resilience/degradation.py --images val/images --labels val/labels --tiles 96
 ```
 
 ---
@@ -410,12 +445,24 @@ conda create -n osp_dev python=3.10 -y && conda activate osp_dev
 pip install -r requirements.txt
 ```
 
-Train the detector: synthetic dataset, stem surgery, two-phase training, ONNX export, INT8 quantization, scored on both backends.
+Train the detector: dataset prep, stem surgery, two-phase training, ONNX export, INT8 quantization, scored on both backends.
 
 ```bash
-python train.py --export          # ~100 min on CPU (26 epochs)
+python train.py --export          # ~100 min on CPU (26 epochs, synthetic corpus)
 python train.py --quick --export  # ~3 min smoke test of every stage
 ```
+
+The shipping weights are **not** from that path. They come from `tools/kaggle_train_dota.ipynb`, which prepares DOTA-v1.0 via `data/dota_prep.py` (11,046 train tiles / 3,677 val tiles at 640 px, stride 480) and runs the same two-phase schedule for 32 epochs on a Tesla P100, 3 h 11 m wall clock. Reproducing locally is the download-and-export path:
+
+```bash
+# after downloading osp_dota_artifacts.zip from the notebook's Output tab
+unzip osp_dota_artifacts.zip -d .
+python satellite_export.py --weights model/artifacts/osp_best.pt --calib val/images
+python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
+    --images val/images --labels val/labels
+```
+
+> The notebook pins `torch==2.5.1+cu121` when it detects a compute capability below sm_70. Kaggle's preinstalled cu128 build has no kernels for the P100's sm_60, and `torch.cuda.is_available()` returns `True` anyway — so the notebook launches a real kernel to check rather than trusting that flag.
 
 Run inference and produce downlink briefs:
 
@@ -457,7 +504,7 @@ pip install skyfield                   # needed for the independent-oracle test
 
 `GEMINI_API_KEY` is needed only for the reasoning layer. Everything upstream, perception, quantization, serialization, the policy engine, runs without any key or network access.
 
-> Training defaults to CPU deliberately. On Apple's MPS backend, the identical run that reaches `cls_loss 0.29 / mAP50 0.99` on CPU diverges to `cls_loss 6.0 / mAP50 0.02` with the same seed and the same data. That's a numerical bug, not a speed trade-off.
+> Training defaults to CPU deliberately. On Apple's MPS backend, the identical run that reaches `cls_loss 0.29 / mAP50 0.99` on CPU diverges to `cls_loss 6.0 / mAP50 0.02` with the same seed and the same data (observed on the synthetic corpus; the DOTA run trained on a Tesla P100 under CUDA). That's a numerical bug, not a speed trade-off.
 
 ---
 
@@ -589,13 +636,13 @@ data/       preprocessing, synthetic corpus, committed TLE snapshot + brief corp
 
 Stated plainly so the scope isn't mistaken for a claim:
 
-- Not validated on real imagery. Training and evaluation are entirely synthetic, on shapes this repository draws. `data/dota_prep.py` and `tools/kaggle_train_dota.ipynb` move it to DOTA aerial imagery; that work is in flight, not finished, and the accuracy numbers here still describe the synthetic detector.
+- Not validated on satellite imagery. The detector is now trained and scored on DOTA-v1.0 aerial photography, not on drawn shapes, but aerial is not orbital: DOTA's ground sample distance is roughly 0.1-1 m against the 10 m the orbital layer models, so objects arrive one to two orders of magnitude larger than a Sentinel-2 pass would deliver them. `tools/generate_briefs.py` refuses to mint Sentinel-2 footprint fields from these tiles without an explicit `--allow-aerial-gsd`. Closing this needs real 10 m multispectral scenes with labels.
 - Not a Skyroot specification. The `skyroot-oam` profile is a `DERIVED` envelope for a launch-vehicle upper-stage compute class, sized an order of magnitude below `moi-1a` so the INT8 and compression work has to genuinely matter. It is not insider knowledge of anyone's hardware and does not claim to be.
 - No real-time AIS fusion, no terrestrial vessel-database integration.
 - No radiation-hardening certification, no RF regulatory compliance. The SEU work in `resilience/` is a conditional measurement of what survives N bit flips, not a radiation model: it says nothing about how often N flips occur.
 - No integrity check on the wire. Briefs carry no checksum, and a single flipped byte survives ingest roughly half the time as a well-formed, wrong observation. Measured, not assumed, in `test_a_single_flipped_byte_can_survive_ingest_undetected`.
 - Silent model corruption is not covered by any fallback. The declared fallbacks catch failures the system can *see*. A bit-flipped model raises nothing, so nothing fires; it just returns confident nonsense, and increasingly more of it.
-- The 6-band argument is unsupported, and real imagery will not rescue it. Every band is a fixed linear combination of R, G and B, so the infrared planes carry no information the visible ones did not; killing B11 and B12 together costs 0.000 mAP. This is arithmetic, not a limitation of the corpus, and it reproduces on DOTA. Settling it needs a sensor that measures SWIR independently. See *Spectral bands*.
+- The 6-band argument is unsupported, and real imagery does not rescue it, though it complicates the story. Every band is a fixed linear combination of R, G and B, so the infrared planes carry no information the visible ones did not add. On real DOTA imagery, dropping B11 and B12 together costs 0.045 mAP (not the 0.000 an earlier draft claimed before any real measurement existed) — the arithmetic redundancy argument still holds, but a trained network is not perfectly indifferent to losing channels it partially learned to lean on. Either way, the two costliest bands to drop are B2 and B4, plain visible channels, not the derived infrared pair the stem swap was motivated by. Settling the SWIR question for real needs a sensor that measures it independently. See *Spectral bands*.
 - Not a link budget. Downlink capacity is rate x duration with a coarse elevation derating, not a computation from antenna gains and noise figures. See *Tradeoffs*.
 - Not a licensed ground station. The Hyderabad site uses Skyroot's corporate coordinates as a planning reference, with a conservative default elevation mask.
 - Pass predictions inherit TLE age. The committed snapshot is dated and graded in the UI; a stale element set gives indicative timing, not pointing-grade timing.
