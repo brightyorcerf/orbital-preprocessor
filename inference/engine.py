@@ -39,7 +39,6 @@ from typing import Optional
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 
 # `python inference/engine.py` puts this file's directory on sys.path, not the
 # repository root, so the sibling packages are not importable without help.
@@ -131,7 +130,7 @@ class OSPPayload:
 
 # ── ONNX session factory ──────────────────────────────────────────────────────
 
-def build_session(model_path: str, profile=None) -> ort.InferenceSession:
+def build_session(model_path: str, profile=None) -> "ort.InferenceSession":
     """
     Build an ONNX Runtime session with deterministic execution settings.
 
@@ -140,7 +139,17 @@ def build_session(model_path: str, profile=None) -> ort.InferenceSession:
     set is a mission parameter: silently picking up a GPU that the flight
     configuration does not include would make ground-side timing measurements
     unrepresentative of on-orbit behaviour.
+
+    Imports onnxruntime lazily. This module also exports plain constants and a
+    numpy-only `postprocess` that training-time validation needs (see
+    `model/evaluate_detector.py`), and a training environment has no reason to
+    carry an inference-serving dependency — Kaggle's image doesn't, which is
+    what surfaced this: `validate()` pulled in this whole module for
+    `CLASS_NAMES` alone and died on a module-level `import onnxruntime` three
+    epochs into a run that never touches an ONNX session.
     """
+    import onnxruntime as ort
+
     if profile is None:
         from config.platforms import get_profile
         profile = get_profile()
