@@ -84,3 +84,6 @@ yolov8n.pt
 osp_dota_artifacts.zip
 val/
 model/artifacts_synthetic_backup/
+
+# Working plan / strategy notes: kept locally, not part of the artifact.
+docs/upgrade4impressive.md

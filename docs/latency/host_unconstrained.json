@@ -1,0 +1,33 @@
+{
+  "tiles_timed": 95,
+  "preprocess_ms": {
+    "mean": 56.88,
+    "p50": 56.93,
+    "p95": 102.48,
+    "p99": 226.14,
+    "max": 242.07
+  },
+  "inference_ms": {
+    "mean": 51.02,
+    "p50": 50.19,
+    "p95": 54.57,
+    "p99": 60.5,
+    "max": 69.77
+  },
+  "end_to_end_ms": {
+    "mean": 107.89,
+    "p50": 106.02,
+    "p95": 154.64,
+    "p99": 282.54,
+    "max": 293.98
+  },
+  "environment": {
+    "cpu_count_visible": 4,
+    "omp_num_threads": "unset",
+    "ort_intra_op_threads": "default",
+    "onnxruntime": "1.23.2",
+    "providers": [
+      "CPUExecutionProvider"
+    ]
+  }
+}

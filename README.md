@@ -12,7 +12,7 @@ A spacecraft decides what to downlink on its next contact, under real orbital an
 
 `LLM in control loop: False, enforced by the interface` · `every declared fallback has a test that fires it`
 
-`3.69 MB INT8 detector` · `51 ms per tile` · `155-byte briefs` · `0.880 mAP@0.5 on 3,677 real DOTA tiles`
+`3.69 MB INT8 detector` · `169 ms per tile end to end on 2 cores` · `155-byte briefs` · `0.880 mAP@0.5 on 3,677 real DOTA tiles`
 
 ![OSP command centre](docs/img.jpg)
 
@@ -345,6 +345,29 @@ Two more numbers complicate the picture further: on real imagery, dropping **B2 
 What would settle it is a sensor that measures short-wave infrared independently — and that is scarce for physical rather than editorial reasons. SWIR's wavelength is roughly three times visible light's, so the same aperture resolves roughly three times less detail, and silicon detectors cannot see SWIR at all. Sentinel-2 carries 10 m visible and 20 m SWIR; WorldView-3 resolves 31 cm panchromatic and about 3.7 m in SWIR. High-resolution short-wave infrared of ships is largely not a thing that exists to be downloaded.
 
 So the honest position: the 6-channel stem is real engineering — channel surgery, INT8 calibration across six planes, band-dropout resilience — built correctly for a sensor this project does not have. It is not a demonstrated perception advantage, and no result here should be read as validating one.
+
+### Latency
+
+`51 ms per tile` is the number this file led with for a long time. It is a *mean*, it is inference only, and it was measured on a laptop with every core available. Two of those three are the wrong shape for a claim about onboard compute: a mean hides the tail a downlink budget has to absorb, and an unconstrained laptop is not a spacecraft.
+
+Re-measured as a distribution, over 100 held-out DOTA tiles (stride-sampled, 5 warm-up runs discarded), with the whole per-tile cost split into its two parts:
+
+| | p50 | p95 | p99 | mean |
+|---|---|---|---|---|
+| **Host, unconstrained** (4 cores) | | | | |
+| preprocess | 56.93 | 102.48 | 226.14 | 56.88 |
+| inference | 50.19 | 54.57 | 60.50 | 51.02 |
+| end to end | 106.02 | 154.64 | 282.54 | 107.89 |
+| **Constrained** (`--cpus 2 --memory 4g`, `OMP_NUM_THREADS=2`) | | | | |
+| preprocess | 87.24 | 140.01 | 215.93 | 88.14 |
+| inference | 88.07 | 113.72 | 185.76 | 82.44 |
+| end to end | 168.91 | 232.71 | 307.65 | 170.58 |
+
+All figures in milliseconds. Reproduce with `tools/latency_bench.py`; the raw output is committed under `docs/latency/`.
+
+Three things worth reading off that table. The old 51 ms claim survives as an inference mean on an unconstrained host, which is what it always was. Halving the cores roughly doubles inference and leaves p99 end to end at **307.65 ms against the platform's 400 ms budget**, so the budget holds at the tail rather than only at the median. And preprocessing is not the free part: at two cores it costs more than inference at p50, because `rgb_to_6band()` runs two `cv2.resize` calls per tile to synthesise the SWIR bands. On a real six-band sensor that work does not exist, so the derived-band design is paying a latency cost for channels it also cannot show a perception benefit from.
+
+This is x86 held to two cores, not ARM. It is a resource-constrained proxy and nothing more: a Pi 5 or an Orin Nano has a different instruction mix and these numbers will not extrapolate to one. That measurement still needs the hardware.
 
 ### Fault tolerance
 
