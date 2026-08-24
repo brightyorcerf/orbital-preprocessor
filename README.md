@@ -480,6 +480,15 @@ Regenerate the committed brief corpus the dashboard serves by default — real I
 python tools/generate_briefs.py        # → data/briefs/ (20 briefs + thumbnails + manifest)
 ```
 
+To check that claim rather than trust it, regenerate the corpus inside the mission container and diff it against what is committed:
+
+```bash
+python tools/verify_docker_repro.py --check-only   # prerequisites, no build
+python tools/verify_docker_repro.py                # build, regenerate, diff
+```
+
+The two inputs stay out of git and out of the image: the 3.7 MB INT8 graph and the 3,677-tile held-out split are both reproducible from the notebook, so they are bind-mounted read only at run time. The claim being verified is therefore *given the artifact and the split, the container regenerates `data/briefs/` byte for byte*, not *a clean clone regenerates it from nothing*. Every field is compared except `meta.inference_ms`, which is wall-clock timing and differs between any two runs by construction.
+
 Inspect the orbital layer directly:
 
 ```bash
@@ -493,6 +502,15 @@ Launch the command centre:
 ```bash
 streamlit run ground/dashboard.py
 ```
+
+The same page in a container, which is what the public deployment runs:
+
+```bash
+docker build -f deploy/Dockerfile -t osp-dashboard .
+docker run --rm -p 8501:8501 osp-dashboard
+```
+
+That image installs `deploy/requirements-dashboard.txt`, not the root manifest. The dashboard serves the committed corpus in `data/briefs/` rather than running the detector, so torch, ultralytics and the RAG stack are not reachable from it: dropping them takes the image from roughly 10 GB to 1.46 GB. Every import outside that slim set is wrapped in a try/except with a visible degraded state, which is what makes the trim safe rather than merely smaller. No API key is baked into the image; ORION reads one from the sidebar for the visitor's own session, so a public deployment cannot spend the owner's quota.
 
 Verify everything:
 

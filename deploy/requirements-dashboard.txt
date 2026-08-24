@@ -1,0 +1,39 @@
+# deploy/requirements-dashboard.txt
+# ─────────────────────────────────
+# What the public dashboard needs, and nothing else.
+#
+# The root requirements.txt is the documented path for *using* OSP: it pulls
+# torch, ultralytics, faiss and sentence-transformers, roughly 2 GB. None of
+# that is reachable from the dashboard, which serves the committed brief corpus
+# in data/briefs/ rather than running the detector. Streamlit Community Cloud
+# caps an app's resources well below 2 GB, so installing the full manifest is
+# not merely slow, it does not fit.
+#
+# Every import the dashboard makes outside this list is wrapped in a
+# try/except ImportError with a visible degraded state, which is why the RAG
+# stack and the training-only dependencies can be dropped without the page
+# failing to boot. See ground/dashboard.py's _AVAILABLE flags.
+
+# ── Page shell and map ────────────────────────────────────────────────────────
+streamlit>=1.32,<2.0
+folium>=0.16,<1.0
+streamlit-folium>=0.18,<1.0
+
+# ── ground/globe.py (imported unguarded, so these are boot-critical) ──────────
+numpy>=1.24,<2.0
+plotly>=5.20,<7.0
+pandas>=2.0
+
+# ── orbital/: the propagator behind the downlink plan panel ───────────────────
+sgp4>=2.23,<3.0
+
+# ── Brief payload inspection (protobuf round-trip + thumbnail decode) ─────────
+protobuf>=5.29,<6.0
+onnxruntime>=1.17,<2.0
+opencv-python-headless>=4.8,<5.0   # headless: no GL in a container
+
+# ── ORION analyst ─────────────────────────────────────────────────────────────
+# Deliberately no key is shipped. A visitor supplies their own in the sidebar,
+# so a public deployment carries no spend risk. Without one the tab renders its
+# "no key configured" state instead of failing.
+google-generativeai>=0.5,<1.0

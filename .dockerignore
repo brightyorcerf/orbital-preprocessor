@@ -1,0 +1,48 @@
+# Build context hygiene.
+#
+# Without this file `COPY . .` ships ~6.8 GB to the daemon: the venv, the
+# generated datasets, the DOTA val split and the 397 MB artifact zip are all
+# sitting in the working tree. The image needs the source and the committed
+# brief corpus, nothing else. Inputs that are deliberately not in git (the INT8
+# graph, the val tiles) are mounted at run time instead - see README.
+
+# Python environments and caches
+.venv/
+venv/
+env/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# VCS and editor state
+.git/
+.github/
+.idea/
+.vscode/
+*.swp
+
+# OS noise
+.DS_Store
+._*
+
+# Generated datasets and training output (regenerate with data/dota_prep.py)
+osp_dataset/
+osp_dataset_*/
+data/input_debug/
+runs/
+*.npy
+
+# DOTA artifacts pulled from the Kaggle run: mounted at run time, not baked in
+val/
+osp_dota_artifacts.zip
+model/artifacts/
+model/artifacts_synthetic_backup/
+
+# Runtime state that must not be baked into an image
+ground/osp_memory.db
+rag/vector_store/
+/output/
+
+# Stray export temporaries
+sym_shape_infer_temp.onnx
+*.onnx

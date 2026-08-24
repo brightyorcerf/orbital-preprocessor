@@ -1,0 +1,19 @@
+# Streamlit configuration for the public OSP Command Centre deployment.
+# Local runs pick this up too, so the hosted page and a developer's page look
+# the same rather than diverging over a theme nobody committed.
+
+[theme]
+base = "dark"
+primaryColor = "#4da3ff"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0e1117"
+textColor = "#e6edf3"
+
+[server]
+headless = true
+# The brief thumbnails are small, but an uploaded payload should not be able to
+# push the container over its memory budget.
+maxUploadSize = 20
+
+[browser]
+gatherUsageStats = false
