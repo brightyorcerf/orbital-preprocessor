@@ -20,7 +20,7 @@ under: perception is allowed to fail, the spacecraft is not. A fault must
 produce a degraded, clearly-flagged answer. It must never produce an exception
 that escapes, and it must never produce a degraded answer that looks healthy.
 
-Run:  python -m pytest test_resilience.py -v
+Run:  python -m pytest tests/test_resilience.py -v
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from resilience.faults import (
     inject_stall,
 )
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 INT8_MODEL = ROOT / "model" / "artifacts" / "osp_yolov8n_int8.onnx"
 BRIEFS_DIR = ROOT / "data" / "briefs"
 

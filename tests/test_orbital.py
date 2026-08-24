@@ -16,7 +16,7 @@ The suite is organised around the two claims this part of the project makes:
      narrative was generated, and the scheduler's interface must offer no
      channel through which a model could reach a decision.
 
-Run:  python -m pytest test_orbital.py -v
+Run:  python -m pytest tests/test_orbital.py -v
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def prop(snapshot):
 @pytest.fixture(scope="module")
 def briefs():
     """The committed brief corpus, if it has been generated."""
-    d = Path(__file__).parent / "data" / "briefs"
+    d = Path(__file__).resolve().parent.parent / "data" / "briefs"
     manifest = d / "manifest.json"
     if not manifest.exists():
         pytest.skip("brief corpus not generated; run tools/generate_briefs.py")

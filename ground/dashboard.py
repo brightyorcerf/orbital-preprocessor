@@ -78,7 +78,7 @@ def get_base64_of_bin_file(bin_file):
     except Exception:
         return ""
 
-bg_path = Path(__file__).parent.parent / "background.jpg"
+bg_path = Path(__file__).parent / "assets" / "background.jpg"
 bg_b64 = get_base64_of_bin_file(bg_path)
 bg_css = f"""
     .stApp {{

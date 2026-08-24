@@ -14,7 +14,7 @@ A spacecraft decides what to downlink on its next contact, under real orbital an
 
 `3.69 MB INT8 detector` · `51 ms per tile` · `155-byte briefs` · `0.880 mAP@0.5 on 3,677 real DOTA tiles`
 
-![OSP command centre](img.jpg)
+![OSP command centre](docs/img.jpg)
 
 ---
 
@@ -221,7 +221,7 @@ What ingest does guarantee is narrower and worth stating precisely: it never rai
 
 ```bash
 python resilience/degradation.py          # regenerates the curve
-python -m pytest test_resilience.py -v
+python -m pytest tests/test_resilience.py -v
 ```
 
 ### 5. Every number in this file regenerates from a script
@@ -264,7 +264,7 @@ This matters because an earlier version of this README confidently advertised "8
 
 The 11-point drop at IoU 0.5 and 31-point drop at strict IoU is what replacing drawn primitives with photographed scenes costs. The synthetic score was not wrong, it was measuring the wrong thing.
 
-Per-class figures are shown because a composite score can hide one dead class behind three healthy ones, and here it would: **storage-tank recall is 0.653** at INT8 against precision of 0.936. The model is not confusing storage tanks with something else, it is failing to find them — 3,610 predictions against 5,177 ground-truth instances. Circular tanks in the synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the axis-aligned box conversion (mean 1.73x area inflation, see `prep_manifest.json`) hurts tightly-packed tank farms more than it hurts isolated aircraft. That class is the honest weak point of this detector.
+Per-class figures are shown because a composite score can hide one dead class behind three healthy ones, and here it would: **storage-tank recall is 0.653** at INT8 against precision of 0.936. The model is not confusing storage tanks with something else, it is failing to find them — 3,610 predictions against 5,177 ground-truth instances. Circular tanks in the synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the axis-aligned box conversion (mean 1.73x area inflation, see `docs/dota/prep_manifest.json`) hurts tightly-packed tank farms more than it hurts isolated aircraft. That class is the honest weak point of this detector.
 
 Quantization costs **0.9 points at IoU 0.5 and 3.2 points at strict IoU**. On the synthetic corpus INT8 appeared to *beat* FP32 (0.993 vs 0.992), which was noise on a corpus too easy to separate the two; on real imagery the cost is visible and consistently in the expected direction.
 
@@ -497,8 +497,8 @@ streamlit run ground/dashboard.py
 Verify everything:
 
 ```bash
-python test_pipeline.py                # 13 tests, engineering path, no API key
-python -m pytest test_orbital.py -v    # 43 tests, orbital mechanics + scheduler
+python tests/test_pipeline.py          # 16 tests, engineering path, no API key
+python -m pytest tests/test_orbital.py -v    # 43 tests, orbital mechanics + scheduler
 pip install skyfield                   # needed for the independent-oracle test
 ```
 
@@ -512,7 +512,7 @@ Fault injection and the degradation curve:
 
 ```bash
 python resilience/degradation.py          # SEU sweep + band dropout, ~4 min CPU
-python -m pytest test_resilience.py -v    # the failure behaviours themselves
+python -m pytest tests/test_resilience.py -v    # the failure behaviours themselves
 ```
 
 ---

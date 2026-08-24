@@ -30,13 +30,13 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Orbital mechanics, scheduler and authority boundary
-        run: python -m pytest test_orbital.py -v
+        run: python -m pytest tests/test_orbital.py -v
 
       - name: Failure behaviours and fault injection
-        run: python -m pytest test_resilience.py -v
+        run: python -m pytest tests/test_resilience.py -v
 
       - name: Engineering path
-        run: python -m pytest test_pipeline.py -v
+        run: python -m pytest tests/test_pipeline.py -v
 
       - name: Report skips
         if: always()

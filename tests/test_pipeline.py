@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 
 # ── Path setup ────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "inference"))
 
@@ -68,7 +68,7 @@ class SkipTest(Exception):
 
 
 # This file is both a standalone runner (`python test_pipeline.py`, which prints
-# a report and sets an exit code) and a pytest module (`pytest test_pipeline.py`,
+# a report and sets an exit code) and a pytest module (`pytest tests/test_pipeline.py`,
 # which CI runs). Those two want opposite things from a failing test: the runner
 # needs the exception swallowed so the remaining tests still execute and the
 # report is complete, and pytest needs it raised or it records a pass.
