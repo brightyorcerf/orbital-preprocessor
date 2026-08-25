@@ -1,0 +1,24 @@
+# ground/requirements.txt
+# ────────────────────────
+# Streamlit Community Cloud resolves dependencies from the entrypoint's own
+# directory before falling back to the repo root. This file exists so the
+# hosted dashboard (entrypoint: ground/dashboard.py) installs the slim
+# dashboard set instead of the root requirements.txt, which pulls torch,
+# ultralytics, faiss and sentence-transformers for the training path the
+# dashboard never touches. Community Cloud's free tier is 1 GB RAM; the full
+# manifest does not fit.
+#
+# Kept identical to deploy/requirements-dashboard.txt (used by the Docker
+# deploy path); see that file for why each package is here.
+
+streamlit>=1.32,<2.0
+folium>=0.16,<1.0
+streamlit-folium>=0.18,<1.0
+numpy>=1.24,<2.0
+plotly>=5.20,<7.0
+pandas>=2.0
+sgp4>=2.23,<3.0
+protobuf>=5.29,<6.0
+onnxruntime>=1.17,<2.0
+opencv-python-headless>=4.8,<5.0
+google-generativeai>=0.5,<1.0
