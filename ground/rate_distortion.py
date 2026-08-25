@@ -26,7 +26,9 @@ Fix a byte budget. Spend it three ways, and count what the ground ends up
 knowing about **the whole imaged corpus** — not merely about the tiles that
 happened to fit:
 
-  raw       lossless 6-band tiles. Ground re-runs the detector on real pixels.
+  raw       lossless 6-band tiles, priced under two codecs. Ground re-runs the
+            detector on real pixels, so both codecs score identically and
+            differ only in what they cost.
   jpeg(q)   RGB tiles at JPEG quality q. Ground re-derives bands and detects.
   brief(c)  onboard detections above confidence c, as wire-format briefs.
 
@@ -34,6 +36,21 @@ The metric is corpus recall: true positives at IoU 0.5 as a fraction of every
 labelled object in the corpus. A tile that never fits in the budget scores
 zero, which is the honest accounting — an object nobody transmitted is an
 object the ground does not know about, however good the codec was.
+
+Why CCSDS 123 is the lossless baseline
+──────────────────────────────────────
+For most of this experiment's life the lossless row was PNG, and that was a
+baseline chosen for convenience rather than for relevance. No spacecraft flies
+PNG. The codec written for compressing image cubes on board a spacecraft is
+CCSDS 123.0-B-1, and `ground/ccsds123.py` implements it, so the comparison is
+now against the thing that actually flies.
+
+It matters, because CCSDS 123 wins. On this corpus it costs about half what
+PNG does, by predicting each band from the bands beside it — redundancy that
+PNG's per-plane byte filters cannot see, and that six bands derived from three
+are unusually full of. The effect is to make the "send pixels" strategy
+roughly twice as cheap as this experiment used to report, and every conclusion
+downstream had to survive that.
 
 Why JPEG is the fair lossy baseline here
 ────────────────────────────────────────
@@ -71,8 +88,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
+from multiprocessing import Pool
 from pathlib import Path
 
 import cv2
@@ -115,6 +134,60 @@ def raw_tile_bytes(tile: np.ndarray) -> int:
             raise RuntimeError("PNG encode failed while pricing a raw tile")
         total += len(buf)
     return total
+
+
+def ccsds_tile_bytes(tile: np.ndarray) -> int:
+    """
+    Cost of downlinking one tile losslessly under CCSDS 123.0-B-1.
+
+    This is the baseline that matters. PNG is a fine lossless codec and no
+    spacecraft flies it; CCSDS 123 is the standard written for exactly this
+    job, and it beats PNG here by roughly a factor of two because it predicts
+    across bands and PNG cannot see the band axis at all.
+
+    Priced at the corpus's true bit depth of 8, not the 16 the PNG row uses.
+    That choice needs stating because it decides the comparison. These tiles
+    are DOTA JPEGs: eight bits of real dynamic range, scaled into float. The
+    PNG row multiplies that by 65535, which invents eight bits of precision
+    the sensor never measured, and the invented bits are not free — they land
+    as a fixed per-sample tax on any codec that cannot represent "every value
+    is a multiple of 257". PNG's LZ77 stage can; the Golomb coder in CCSDS
+    cannot. Pricing CCSDS at 16 bits would therefore have reported it as
+    *worse* than PNG (8.99 vs 8.51 bits/sample on the first val tile) purely
+    as an artifact of the upscaling, and would have handed OSP a four-fold
+    advantage it has not earned.
+    """
+    from ground.ccsds123 import compressed_bytes
+
+    counts = np.clip(tile * 255.0, 0, 255).astype(np.uint8).astype(np.int64)
+    return compressed_bytes(counts, depth=8)
+
+
+def _price_ccsds(tile_path: Path) -> int:
+    """Pool worker: read one tile and price it. Top-level so it pickles."""
+    return ccsds_tile_bytes(read_tile(tile_path))
+
+
+def ccsds_costs(tiles: list[Path], workers: int | None = None) -> list[int]:
+    """
+    Price every tile under CCSDS 123, in parallel.
+
+    The encoder is a sequential integer recurrence and runs about nine seconds
+    per tile, which is an hour of wall clock over the full corpus and the only
+    reason this needs a process pool at all. Tiles are independent, so the
+    result is order-for-order identical to the serial version.
+    """
+    workers = workers or min(len(tiles), (os.cpu_count() or 2))
+    if workers <= 1:
+        return [_price_ccsds(t) for t in tiles]
+
+    with Pool(workers) as pool:
+        out = []
+        for n, nbytes in enumerate(pool.imap(_price_ccsds, tiles, chunksize=1), 1):
+            out.append(nbytes)
+            if n % 20 == 0:
+                log.info(f"  CCSDS-priced {n}/{len(tiles)} tiles")
+        return out
 
 
 def jpeg_roundtrip(tile: np.ndarray, quality: int) -> tuple[int, np.ndarray]:
@@ -174,7 +247,7 @@ def brief_bytes(detections: list[dict], scene_id: str) -> int:
 class Strategy:
     """One operating point: a way of spending bytes, at one setting."""
     family:  str                 # "raw" | "jpeg" | "brief"
-    setting: float | None        # JPEG quality, or brief confidence
+    setting: float | str | None  # codec name, JPEG quality, or brief confidence
     cost:    list[int] = field(default_factory=list)   # bytes, per tile
     tp:      list[int] = field(default_factory=list)   # true positives, per tile
     fp:      list[int] = field(default_factory=list)   # false positives, per tile
@@ -182,7 +255,7 @@ class Strategy:
     @property
     def label(self) -> str:
         if self.family == "raw":
-            return "raw (lossless)"
+            return f"raw ({self.setting})"
         if self.family == "jpeg":
             return f"jpeg q{int(self.setting)}"
         return f"brief c{self.setting:.2f}"
@@ -221,6 +294,7 @@ def build_strategies(
     backend,
     conf:       float = CONF_THRESHOLD,
     iou:        float = IOU_THRESHOLD,
+    ccsds:      list[int] | None = None,
 ) -> tuple[list[Strategy], int]:
     """
     Price every strategy on every tile, and count the corpus's total objects.
@@ -230,7 +304,7 @@ def build_strategies(
     re-threshold the detections the spacecraft already computed, which is
     precisely the asymmetry the architecture is built around.
     """
-    strategies = [Strategy("raw", None)]
+    strategies = [Strategy("raw", "png"), Strategy("raw", "ccsds123")]
     strategies += [Strategy("jpeg", q) for q in JPEG_QUALITIES]
     strategies += [Strategy("brief", c) for c in BRIEF_CONFIDENCES]
 
@@ -248,9 +322,13 @@ def build_strategies(
         for s in strategies:
             if s.family == "raw":
                 # Lossless: the ground sees the same pixels, so the same
-                # detections. No second inference needed.
+                # detections, whichever codec carried them. No second
+                # inference needed, and the two codecs differ only in price.
                 kept = [d for d in onboard if d["conf"] >= conf]
-                s.cost.append(raw_tile_bytes(tile))
+                s.cost.append(
+                    raw_tile_bytes(tile) if s.setting == "png"
+                    else (ccsds[n - 1] if ccsds else ccsds_tile_bytes(tile))
+                )
 
             elif s.family == "jpeg":
                 nbytes, degraded = jpeg_roundtrip(tile, int(s.setting))
@@ -416,7 +494,7 @@ def plot(curves: dict, contact: dict, out_path: Path) -> bool:
                 for _, pts in members
             ))
         ax.plot(budgets, best, label={
-            "raw": "raw tiles (lossless)",
+            "raw": "raw tiles (best lossless codec)",
             "jpeg": "JPEG tiles (best quality per budget)",
             "brief": "semantic briefs (best threshold per budget)",
         }[family], **styles[family])
@@ -451,6 +529,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--conf", type=float, default=CONF_THRESHOLD)
     ap.add_argument("--iou",  type=float, default=IOU_THRESHOLD)
+    ap.add_argument("--workers", type=int, default=None,
+                    help="processes for CCSDS pricing (default: all cores)")
     ap.add_argument("--json-out", default="model/artifacts/rate_distortion.json")
     ap.add_argument("--plot-out", default="docs/rate_distortion.png")
     args = ap.parse_args()
@@ -479,10 +559,15 @@ def main() -> int:
     from model.evaluate_detector import OnnxBackend
     backend = OnnxBackend(str(model_path))
 
+    log.info(f"pricing {len(tiles)} tiles under CCSDS 123 on "
+             f"{args.workers or os.cpu_count()} workers")
+    ccsds = ccsds_costs(tiles, args.workers)
+
     log.info(f"pricing {len(tiles)} tiles across "
-             f"{1 + len(JPEG_QUALITIES) + len(BRIEF_CONFIDENCES)} operating points")
+             f"{2 + len(JPEG_QUALITIES) + len(BRIEF_CONFIDENCES)} operating points")
     strategies, total_gt = build_strategies(
         tiles, Path(args.labels), backend, conf=args.conf, iou=args.iou,
+        ccsds=ccsds,
     )
 
     contact = contact_budget_bytes(args.platform)
@@ -506,8 +591,12 @@ def main() -> int:
         "summaries": summaries,
         "curves": {lab: pts for lab, (_, pts) in curves.items()},
         "caveats": [
-            "Raw is priced as lossless PNG over six uint16 planes, not the "
-            "float32 array held in memory.",
+            "Raw is priced two ways: lossless PNG over six uint16 planes, and "
+            "CCSDS 123.0-B-1 over six uint8 planes at the corpus's true depth. "
+            "CCSDS 123 is the standard that actually flies and is the number "
+            "to quote; the PNG row is kept because earlier results used it.",
+            "Neither raw row is the float32 array held in memory, which would "
+            "roughly double the raw cost and flatter OSP for free.",
             "Briefs are priced as minified JSON; the protobuf encoding is "
             "~2.4x smaller, so the brief cost reported here is conservative.",
             "Ground-side detection uses the same detector and threshold as "

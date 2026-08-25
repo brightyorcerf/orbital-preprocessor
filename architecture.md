@@ -34,11 +34,24 @@ usable passes in the following 24 h: 2
 
 `MEASURED`, from `orbital/passes.py:find_passes` on the committed snapshot `data/tle/celestrak_resource_2026-08-21.tle`, planned from the last capture time in `data/briefs/manifest.json`. The dashboard computes exactly this in `ground/dashboard.py:557`.
 
-1.95 MB. That is the whole budget. A Sentinel-2 scene is about 100 MB (`DERIVED`, the industry-standard figure hardcoded at `inference/serialization_utils.py:344`). One tile of that scene, held in memory as the pipeline holds it, is:
+1.95 MB. That is the whole budget. Now price what it would have to carry.
+
+One tile of a scene, held in memory as the pipeline holds it, is:
 
 ```
 640 px x 640 px x 6 bands x 4 bytes (float32) = 9,830,400 B = 9.83 MB
 ```
+
+**That figure is not a downlink cost, and for most of this project's life it was used as one.** It is a working-set size. Nothing transmits an uncompressed float32 buffer; a spacecraft compresses first, and the standard it compresses with is CCSDS 123.0-B-1. Priced that way, over the committed corpus (`MEASURED`, `data/briefs/manifest.json` `raw_ccsds_bytes`, encoder at `ground/ccsds123.py`):
+
+```
+mean over 20 held-out tiles = 12,234,137 B / 20 = 611,707 B = 0.61 MB per tile
+                                                = 1.99 bits per sample
+```
+
+A factor of 16 sits between those two numbers, and every compression claim this project made used the larger one. Section 9 records what that cost. `orbital/downlink.py` now defaults to the wire price, `RAW_TILE_BYTES_CCSDS`, and keeps `RAW_TILE_BYTES_FLOAT32` named separately so the distinction stays visible instead of implied.
+
+A scene covers 110 km on a side and a tile 6.4 km, so a scene is `(110 / 6.4)^2` = **295.4 tiles**, or **180.7 MB** sent losslessly. (The ~100 MB usually quoted for a Sentinel-2 product, `DERIVED`, hardcoded at `inference/serialization_utils.py:344`, is a *delivered* product: already lossily compressed, not every band at full rate. It is not the like-for-like number and is no longer on the critical path of this argument.)
 
 So the arithmetic that shapes everything downstream is a single division:
 
@@ -47,20 +60,20 @@ So the arithmetic that shapes everything downstream is a single division:
                                     │
         ┌───────────────────────────┼───────────────────────────┐
         │                           │                           │
-   one 100 MB scene           one 9.83 MB tile          one 155 B brief
-   0.0195 of it fits          0.198 of it fits          12,579 of them fit
+  one 180.7 MB scene          one 0.61 MB tile          one 155 B brief
+   0.0108 of it fits          3.19 of them fit          12,579 of them fit
         │                           │                           │
-   "come back in                "come back in            "and 99.6% of the
-    51 contacts"                 5 contacts"              window is still free"
+   "come back in                "three tiles              "and 99.6% of the
+    93 contacts"                 out of 295"              window is still free"
 ```
 
-The middle column is the one that kills the naive design. You cannot even move one tile. And the camera does not wait: at 2 usable passes per day, a spacecraft imaging anything at all produces backlog faster than the link drains it, forever. There is no patience strategy. There is no better compression of pixels that closes a factor of 5 on a single tile and a factor of 51 on a scene while the sensor keeps running.
+The left column is the one that kills the naive design. Three tiles a contact, six a day, against a scene that is 295: a spacecraft imaging anything at all produces backlog faster than the link drains it, forever. There is no patience strategy, and there is no better compression of pixels that closes a factor of 93 on a scene while the sensor keeps running. CCSDS 123 *is* the better compression of pixels, and it is already in that middle column.
 
 That is why on-board inference is not an optimisation here. It is the only operating point that exists.
 
 Run the real corpus through that real window and the comparison is not close:
 
-> **20 held-out tiles as raw imagery.** 20 x 9.83 MB = 196.6 MB. Against this window's 1.95 MB, that is **100.84 contacts**, about 50 days at 2 usable passes per day. (`MEASURED`, `DownlinkPlan.raw_downlink_passes`, `orbital/downlink.py:399`.)
+> **20 held-out tiles as raw imagery.** 12,234,137 B under CCSDS 123. Against this window's 1.95 MB, that is **6.28 contacts**, about three days at 2 usable passes per day. (`MEASURED`, `DownlinkPlan.raw_downlink_passes`, `orbital/downlink.py`, against `RAW_TILE_BYTES_CCSDS`.)
 >
 > **The same 20 tiles as briefs.** 8,266 B of JSON, 21 detections. **One** pass, using 0.42% of it, with room for 4,700 more briefs. (`MEASURED`, `data/briefs/manifest.json` totals, plus `DownlinkPlan.capacity_in_briefs`.)
 
@@ -137,7 +150,7 @@ The obvious encoding is the one the dashboard already reads, JSON:
 
 410 bytes for the same content. Where does the extra 255 go? Almost entirely into three habits JSON cannot break: it spells every field name out on every message, it writes numbers as decimal text, and it writes class names as words. `"type":"harbor"` is 15 characters. The same fact in protobuf is `0804`: two bytes, one for the tag and one for the enum value.
 
-Measured across the whole committed corpus (`MEASURED`, 20 briefs, script in the repro block below): protobuf mean **155.35 B**, JSON mean **413.30 B**, ratio **2.66x**, and against the 9.83 MB raw tile, **63,279:1**.
+Measured across the whole committed corpus (`MEASURED`, 20 briefs, script in the repro block below): protobuf mean **155.35 B**, JSON mean **413.30 B**, ratio **2.66x**, and against the 0.61 MB CCSDS-compressed tile, **3,938:1**.
 
 ### Field by field
 
@@ -256,7 +269,7 @@ def load(b):
         compression_ratio=b["meta"]["compression_ratio"])
 p = [len(serialize_to_binary(load(json.load(open(f)))))
      for f in sorted(glob.glob("data/briefs/P*.json"))]
-print("proto mean", sum(p)/len(p), "raw tile ratio", 9830400/(sum(p)/len(p)))
+print("proto mean", sum(p)/len(p), "raw tile ratio", 611707/(sum(p)/len(p)))
 PY
 ```
 
@@ -310,7 +323,7 @@ P2794_00000_03360   1.0000  0.1764  0.0538  0.0297  0.0003  0.0000   cliff  88x
 
 `MEASURED` on real DOTA tiles, mean-centred, normalised to the leading value. Four significant components then a cliff of 60x to 200x into numerical noise. Three of the four are the RGB the tile started as. The fourth is the resample applied to B11 and B12, which is a spatial blur of a derived channel: still a function of RGB, still carrying nothing new.
 
-**And yet the trained network is not indifferent to losing them.** Re-measured on real DOTA imagery over 96 stride-sampled held-out tiles, dropping B11 alone costs 0.003 mAP, dropping B12 alone *improves* it by 0.007 (noise at this sample size), and dropping **both together costs 0.045 mAP**, 0.836 to 0.791, about 5.4% relative.
+**And yet the trained network is not indifferent to losing them.** Re-measured on real DOTA imagery over 96 stride-sampled held-out tiles, dropping B11 alone costs 0.003 mAP, dropping B12 alone *improves* it by 0.007 (noise at this sample size), and dropping **both together costs 0.046 mAP**, 0.836 to 0.791, about 5.4% relative.
 
 Those two facts are compatible, and the reconciliation is the point. *Information-redundant is not the same as a trained network being indifferent to losing the channel.* The stem swap seeds the infrared channels from the mean of the RGB weights, which is a live starting point rather than zero, and 32 epochs of real gradient descent evidently pulled B11 and B12 into carrying part of the load, however redundantly. At inference time, zeroing a channel the network learned to lean on is a distribution shift, not an information loss. Losing two of six input channels is not the same operation as never having trained on them.
 
@@ -944,34 +957,100 @@ This is the same idea as `test_scheduler_interface_exposes_no_model_hook`, point
 
 The watchdog is honest about what it models (`inference/engine.py:402`). On real flight hardware a watchdog is an external timer that resets the compute, and software does not get to observe its own overrun. Here the overrun is detected in-process, after the fact. What is modelled faithfully is the *recovery* path: fall back to the declared behaviour and flag ground, which is what the flight system would do on reset. What is not modelled is the reset itself.
 
-### The first uncaught fault: silent bit flips, which get louder
+### The first fault the model cannot see: silent bit flips, which get louder
 
 A single-event upset is the characteristic failure of flight compute, not an exotic one, and in INT8 weights it lands as silent numerical corruption. Which bit flips matters enormously: INT8 weights are two's complement, so a flip in bit 7 changes a weight by 128 quantisation steps and a flip in bit 0 changes it by one. `flip_weight_bits` (`resilience/faults.py:82`) places flips uniformly over the weight bit population, weighting tensor selection by element count so a bit is equally likely anywhere in weight memory rather than equally likely per tensor. That is the right null model for particle strikes: the hardware has no idea which bit is the sign bit.
 
 The model holds **25,026,816 bits** of quantised weight memory (`MEASURED`, `resilience/artifacts/degradation.json`).
 
-Committed sweep, on the synthetic split, 24 tiles per point, 3 seeds:
+Committed sweep, on the DOTA held-out split, 96 tiles per point, 3 seeds:
 
 | bits flipped | share of weight memory | mAP@0.5 | detections emitted |
 | ---: | ---: | ---: | ---: |
-| 0 | 0% | 0.996 | 119 |
-| 32,768 | 0.13% | 0.981 | 116 |
-| 65,536 | 0.26% | 0.617 | 98 |
-| 131,072 | 0.52% | 0.259 | **317** |
-| 262,144 | 1.05% | 0.003 | **754** |
-| 1,048,576 | 4.19% | 0.000 | **6,573** |
+| 0 | 0% | 0.836 | 856 |
+| 16,384 | 0.07% | 0.801 | 643 |
+| 32,768 | 0.13% | 0.622 | 475 |
+| 65,536 | 0.26% | 0.338 | 225 |
+| 131,072 | 0.52% | 0.030 | 45 |
+| 262,144 | 1.05% | 0.000 | 1 |
+| 524,288 | 2.09% | 0.000 | **1,341** |
+| 1,048,576 | 4.19% | 0.000 | **16,548** |
 
-`MEASURED`, `resilience/artifacts/degradation.json`, regenerate with `python resilience/degradation.py`.
+`MEASURED`, `resilience/artifacts/degradation_dota.json`, regenerate with
+`python resilience/degradation.py --images val/images --labels val/labels --tiles 96`.
 
-Read the right-hand column. **As the model collapses it emits more detections, not fewer.** 119 at baseline, 6,573 at the far end, essentially all of it wrong, with the graph loading cleanly, every tensor the right shape, inference returning normally, and nothing anywhere raising. The failure mode is not silence. It is confident nonsense.
+Read the right-hand column, and read it to the bottom. Detections fall as the model degrades, and then past 1% of weight memory they **explode**: 856 at baseline, 1 at the point of total collapse, then 1,341 and finally 16,548 at the far end, 19x the clean baseline and essentially all of it wrong. The graph loads cleanly throughout, every tensor is the right shape, inference returns normally, and nothing anywhere raises. The failure mode is not silence. It is confident nonsense, and it is not even monotone, so a naive "did we get a plausible number of detections" heuristic passes at both ends and fails in the middle.
 
 Which is the same argument this repository makes about language models, arriving unexpectedly at the detector. A component whose failure produces well-formed output cannot be guarded by checking whether it produced output.
 
 This is the one fault in the table that the declared fallback cannot catch, because there is no error to catch. The declared fallbacks catch failures the system can *see*.
 
-**Two honesty notes on this table.** First, it is a conditional measurement, not a radiation model (`resilience/__init__.py:42`). It says what survives given N flips and nothing whatsoever about how often N flips occur. Second, the committed artifact is the **synthetic-split run**, baseline mAP 0.996 and 119 detections. The README quotes a DOTA re-run with baseline 0.836 and 856 detections, collapsing between 0.13% and 0.52% and reaching 16,548 detections at 4.19%. That re-run's artifact is not committed, so `resilience/artifacts/degradation.json` and the README's fault-tolerance table describe different runs, and **the dashboard's resilience panel renders the committed synthetic one** (`ground/dashboard.py:903`). The collapse-then-explosion shape reproduces on both. Only the flip counts at the knee move.
+### What catches it instead
 
-That has a second consequence worth stating plainly, since this document's standard is that a stale claim is worse than an absent one: the dashboard's band-dropout caption (`ground/dashboard.py:927`) still says zeroing any single band including the SWIR pair "costs this model nothing measurable", which is the synthetic result. The README carries the corrected DOTA measurement from section 3, where B11 and B12 together cost 0.045 mAP. The live page shows the retracted shape.
+If the perception path cannot see the fault, the check has to sit outside the perception path and never ask the model anything. That is what memory scrubbing is, and it is standard flight practice rather than an invention here: hold a golden copy of the weights in protected storage, walk working memory periodically, repair what has drifted.
+
+`resilience/protect.py` implements the two halves separately, because a platform may afford one and not the other:
+
+| | state needed | detects | repairs |
+| :--- | :--- | :--- | :--- |
+| `verify()` | 252 B, one CRC-32 per weight tensor | yes | no |
+| `scrub()` | the above plus a golden copy of the weights | yes | yes |
+
+Detection alone is nearly free — 252 bytes of state against a 3.69 MB artifact, one linear pass in **15 ms** — and it is worth having on its own. A spacecraft that can only detect still knows to stop trusting its own detections and to request an uplink, which is a great deal better than the silent degradation it replaces.
+
+CRC-32 rather than a cryptographic hash, deliberately: the adversary is a particle, not a person. CRC-32 catches every 1-, 2- and 3-bit error in a block this size and all odd-weight errors, which is the failure mode exactly, and `zlib.crc32` is stdlib and implemented in C.
+
+The end-to-end check runs inside the committed sweep rather than only in a test, because a safety property nobody has watched execute is a comment with a type annotation:
+
+```
+65,536 flips, spread across all 63 weight tensors
+   detected  63 of 63
+   mAP@0.5   0.836  ->  0.359  ->  0.836
+                          bad       after scrub
+```
+
+`fully_restored: true` in `resilience/artifacts/degradation_dota.json` asserts the last two are *equal*, not close. The repaired weights are byte-identical to the golden copy, so any difference at all would mean the evaluation pipeline is non-deterministic and the entire degradation curve above is noise.
+
+### Which bits are worth protecting
+
+The uniform sweep is the correct physical model — a particle has no idea which bit is the sign bit — and it is the wrong measuring instrument, because it reports the average of eight populations worth wildly different amounts. Confining all 65,536 flips to one bit position at a time:
+
+| bit flipped | weight moves by | mAP@0.5 | retained |
+| ---: | ---: | ---: | ---: |
+| 0 | 1 | 0.839 | 1.003 |
+| 1 | 2 | 0.846 | 1.011 |
+| 2 | 4 | 0.842 | 1.007 |
+| 3 | 8 | 0.830 | 0.993 |
+| 4 | 16 | 0.796 | 0.952 |
+| 5 | 32 | 0.623 | 0.745 |
+| 6 | 64 | 0.130 | 0.156 |
+| 7 (sign) | -128 | **0.000** | **0.000** |
+
+`MEASURED`, same artifact. Retention around 1.0 in the low bits is not the model improving under radiation; it is the noise floor of a 96-tile evaluation, and it is the right scale against which to read 0.156 four rows down.
+
+The bottom half of the byte is free. The top half is where the model lives, and the cost tracks the size of the weight perturbation, which is what an INT8 two's complement weight should do and is worth having measured rather than assumed. The consequence: **a scheme protecting only the top four bits would buy essentially all the available safety for half the state.** Nothing here implements that, because a CRC over the whole tensor is cheap enough on a 3.69 MB model and a second half-built scheme is worse than one that works. It is recorded because it is the first thing to reach for if a golden copy ever stops fitting in memory.
+
+### How often to scrub
+
+With a degradation curve and a tolerance, the interval is arithmetic. The detector holds 95% of baseline mAP through **16,384 flips**, 0.065% of its 25,026,816 weight bits, so:
+
+| upset rate (per bit per day) | scrub every |
+| :--- | ---: |
+| 1e-5 | 65.5 days |
+| 1e-6 | 654.7 days |
+| 1e-7 | 6,547 days |
+
+That rate is the one number in this section tagged `ASSUMED` rather than `MEASURED`, and it cannot be anything else: OSP has no flight hardware and therefore no radiation test report. `UPSET_RATE_RANGE` in `resilience/protect.py` carries the order of magnitude commercial SRAM is generally quoted at in low Earth orbit, and everything downstream is linear in it, so a reader holding a real device's test data can rescale the table without rerunning anything.
+
+Two ceilings on that arithmetic, stated because they both point the same way: upsets arrive as a Poisson process, so half of all intervals see more than the mean and a real mission would size against a tail quantile rather than the expectation; and multi-bit upsets, where one particle flips several adjacent cells, are ignored entirely. Both shorten the true interval. The `ponytail:` comment on `scrub_interval_hours` records the upgrade path.
+
+**One honesty note on this table.** It is a conditional measurement, not a radiation model (`resilience/__init__.py`). It says what survives given N flips. The rate at which N flips occur is supplied separately, is `ASSUMED`, and is dealt with three subsections down.
+
+> **Closed.** This section used to carry a second note, and it was the more embarrassing one: the committed artifact was the *synthetic-split* sweep (baseline 0.996, 119 detections) while the README quoted a DOTA re-run whose artifact had never been committed. Two documents describing different runs, and the live dashboard rendering the older of them, including a band-dropout caption the README had already corrected. The DOTA sweep is now committed as `resilience/artifacts/degradation_dota.json`, the tables above and in the README are both generated from it, and `ground/dashboard.py` prefers it over the synthetic file. The synthetic sweep stays only as a fallback for a checkout that has not regenerated anything.
+>
+> The re-run reproduces the README's figures exactly, which is the outcome that was in doubt: baseline **0.836**, **856** detections, **16,548** at 4.19%, all matching what this document had been quoting from an artifact nobody could check. An intermediate 24-tile run did *not* match (baseline 0.895, 165 detections, 4,002 at the far end), and that disagreement is worth recording rather than discarding: a 24-tile mAP is a noisy instrument, the sample size is part of the measurement, and the sweep is committed at 96 tiles per point precisely because that is the size the quoted numbers were taken at. The collapse-then-explosion *shape* reproduces at every sample size. The magnitudes need the sample size stated alongside them.
+
+That had a second consequence, and it is worth recording how long it survived. The dashboard's band-dropout caption asserted that zeroing any single band, including the SWIR pair, "costs this model nothing measurable". That was the synthetic result. The README had already carried the corrected DOTA measurement, where B11 and B12 together cost 0.046 mAP, for several commits before anyone noticed that the deployed page was still stating the retracted one. A document can retract a claim; a running service keeps serving whatever artifact it was pointed at. The caption is now computed from the committed DOTA figures rather than written by hand, which is the only version of this fix that cannot go stale again.
 
 ### The second uncaught fault: one flipped byte
 
@@ -1119,11 +1198,35 @@ The class that computes it now says so in its own docstring, keeps the field bec
 
 That is the first lesson of this section: **a ratio is a claim about two things, and most bad ratios are correct arithmetic over mismatched denominators.**
 
-The second is worse, and it survives fixing the coverage.
+### The same error again, in the denominator that replaced it
+
+Fixing the coverage mismatch did not fix the denominator. It fixed *how much ground* the denominator covered and left *what the denominator was made of* untouched, and that second half was wrong for longer.
+
+Every compression claim this project made divided by **9,830,400 B**: one tile as a float32 array. That number is correct and it is not a downlink cost. It is a working-set size, what the inference engine allocates to hold a tile while the model looks at it. Nothing transmits an uncompressed float32 buffer. A spacecraft compresses first, and the standard it compresses with is CCSDS 123.0-B-1.
+
+So the alternative OSP was beating was not a codec. It was the absence of one.
+
+```
+   priced as              per tile        20-tile corpus     ratio vs 8,266 B
+   ─────────────────────  ─────────────   ──────────────     ────────────────
+   float32 in memory      9,830,400 B     196,608,000 B          23,785 : 1
+   lossless PNG, uint16   2,546,639 B      50,932,783 B           6,162 : 1
+   CCSDS 123.0-B-1          611,707 B      12,234,137 B           1,480 : 1
+```
+
+**16x, from the top row to the bottom.** The per-tile figure falls from 63,279:1 to 3,938:1 by the same factor.
+
+What makes this one worth recording rather than merely fixing is that the repository already contained the correct reasoning and did not apply it. `ground/rate_distortion.py` had refused to price raw at float32 since it was written, on the explicit grounds that doing so "would inflate OSP's advantage by roughly 2x for free" — and then priced it as PNG, a codec no spacecraft flies, while the README divided by float32 anyway. Three prices for one tile, in one repository, differing by 16x end to end: the experiment was strict, the headline was not, and nothing forced them to agree.
+
+`ground/ccsds123.py` now implements the standard, `orbital/downlink.py` defaults to `RAW_TILE_BYTES_CCSDS` and names `RAW_TILE_BYTES_FLOAT32` separately so the distinction cannot be made by accident, `data/briefs/manifest.json` records `raw_ccsds_bytes` per tile beside `wire_bytes` per brief, and `tests/test_raw_pricing.py` fails if the quoted ratio and the committed artifact drift apart.
+
+One note in the other direction, because this baseline is generous to the opponent and that should be said before someone else says it: CCSDS 123 reaches **1.99 bits per sample** on this corpus, which is better than it would manage on a real instrument. Five of these six bands are linear functions of the first three (`prep_manifest.json` states this outright), so the inter-band predictor is exploiting redundancy a measuring sensor would never supply. On genuine multispectral data the raw side costs more and OSP's margin is wider than 1,480x. The number reported is the unkind one.
+
+The second lesson is worse than the first, and it survives fixing both denominators.
 
 ### Why a ratio is the wrong question entirely
 
-The honest per-tile ratio on the current corpus is 63,279:1 (155 B protobuf against a 9.83 MB tile). The previous synthetic corpus reported 43,497:1. **The number went up, and that is not good news.** Nothing about the encoding improved. These 20 tiles average 1.05 detections per brief where the synthetic scenes were denser, and an emptier brief is a smaller brief. The largest per-scene ratio in the corpus belongs to a brief containing **zero detections**, because an empty brief is nearly free.
+The honest per-tile ratio on the current corpus is 3,938:1 (155 B protobuf against a 0.61 MB CCSDS-compressed tile). The previous synthetic corpus reported 43,497:1. **The number went up, and that is not good news.** Nothing about the encoding improved. These 20 tiles average 1.05 detections per brief where the synthetic scenes were denser, and an emptier brief is a smaller brief. The largest per-scene ratio in the corpus belongs to a brief containing **zero detections**, because an empty brief is nearly free.
 
 So a compression ratio partly measures how empty your scenes happened to be. That is a property of the dataset, not of the method.
 
@@ -1161,7 +1264,8 @@ for b in budgets:
 
 | Strategy | Bytes/tile | Recall | Precision | Tiles per contact |
 | :--- | ---: | ---: | ---: | ---: |
-| raw, lossless | 2,366,944 | 0.862 | 0.920 | 0.5 |
+| **raw, lossless (CCSDS 123)** | **592,934** | 0.862 | 0.920 | **2.0** |
+| raw, lossless (PNG) | 2,366,944 | 0.862 | 0.920 | 0.5 |
 | JPEG q75 | 53,317 | 0.828 | 0.920 | 22.5 |
 | JPEG q30 | 26,079 | 0.814 | 0.925 | 46.0 |
 | JPEG q2 | 8,291 | 0.507 | 0.846 | 144.7 |
@@ -1170,7 +1274,9 @@ for b in budgets:
 | brief @ 0.65 | 755 | 0.707 | 0.974 | 1,590 |
 | brief @ 0.80 | 273 | **0.000** | **0.000** | 4,396 |
 
-**The brief at confidence 0.35 ties raw lossless exactly.** 0.8622 recall and 0.9204 precision in both rows, to four decimal places, for 1/2,648th of the bytes.
+**The brief at confidence 0.35 ties raw lossless exactly.** 0.8622 recall and 0.9204 precision in both rows, to four decimal places, for 1/663rd of the bytes.
+
+Two raw rows, because the codec is the whole difference. Both deliver identical pixels and therefore identical detections; PNG charges four times as much for them. PNG filters bytes within a plane and cannot see the band axis at all, while CCSDS 123 predicts each band from the bands beside it, which on a six-band cube derived from three is most of the available redundancy. The PNG row stays in the table because every earlier version of this document quoted it, and because a reader should be able to see what choosing the wrong lossless codec costs.
 
 Not approximately, and it is not luck. The brief *is* the raw tile's detection result at the deployed threshold, and the ground station runs the same detector either way. `build_strategies` computes onboard detections once and the raw strategy filters that same result (`ground/rate_distortion.py:250`), because a lossless downlink means the ground sees identical pixels and therefore identical detections. The row is a tautology made visible, and it is the sharpest form of the architecture's argument: **at the deployed operating point, downlinking pixels buys the ground literally nothing over downlinking the answer.**
 
@@ -1202,7 +1308,7 @@ Both tools now sample at even stride (`model/evaluate_detector.py:312`, `ground/
 
 Three ways, each explicit in the code and repeated in the artifact's `caveats` list:
 
-- **Raw is priced as lossless PNG over six uint16 planes** (`ground/rate_distortion.py:101`), not the 9.83 MB float32 array actually held in memory. Pricing float32 would roughly double the raw cost and flatter OSP for free.
+- **Raw is priced under CCSDS 123.0-B-1** (`ground/ccsds123.py`), the lossless standard for compressing image cubes on board a spacecraft, not as PNG and not as the 9.83 MB float32 array held in memory. CCSDS 123 costs about half what PNG does on this corpus, so this is the strongest fair opponent available rather than a convenient one. It is arguably *too* strong: it reaches 1.99 bits per sample here because five of the six bands are linear functions of the first three, redundancy a measuring instrument would not supply.
 - **Briefs are priced as minified JSON** (`ground/rate_distortion.py:140`), when the protobuf they really ship in is 2.66x smaller.
 - **Ground-side detection uses the same detector at the same threshold as onboard**, so the pixel strategies are never handicapped by a weaker analyst.
 
@@ -1301,7 +1407,7 @@ You should not, and the repository refuses to let you. DOTA is roughly 0.1 to 1 
 
 The architectural motivation is dead as a *demonstrated* advantage, yes. B8, B11 and B12 are fixed linear maps of R, G and B (`data/synthetic_bands.py:105`), the singular values show four significant components and then a cliff, and a convolution can form any of those mixes itself. So the infrared planes carry no information the visible bands did not already contain, and no result here validates the SWIR-through-haze argument.
 
-Two things complicate the obituary. Dropping B11 and B12 together does cost 0.045 mAP on real imagery, because a network trained for 32 epochs learned to lean on channels it did not strictly need, and removing them at inference time is a distribution shift rather than an information loss. And the two costliest bands to drop are B2 and B4, plain visible channels, which is exactly what the arithmetic predicts and not the shape the earlier synthetic-only measurement suggested. Meanwhile the derived bands cost real latency: at two cores, `rgb_to_6band`'s two resize calls make preprocessing more expensive than inference at p50.
+Two things complicate the obituary. Dropping B11 and B12 together does cost 0.046 mAP on real imagery, because a network trained for 32 epochs learned to lean on channels it did not strictly need, and removing them at inference time is a distribution shift rather than an information loss. And the two costliest bands to drop are B2 and B4, plain visible channels, which is exactly what the arithmetic predicts and not the shape the earlier synthetic-only measurement suggested. Meanwhile the derived bands cost real latency: at two cores, `rgb_to_6band`'s two resize calls make preprocessing more expensive than inference at p50.
 
 The honest summary: real channel surgery, real INT8 calibration across six planes, real band-dropout resilience, built correctly for a sensor this project does not have.
 
@@ -1329,7 +1435,7 @@ Both, at different scopes, and the scopes are worth separating. `bitwise_determi
 
 **8. "Your README quotes numbers your committed corpus does not reproduce. How much of the rest should I trust?"**
 
-Three cases, all named in this document. The "15.8 KB, 104 detections, five oversize deferrals" figures are true of the previous corpus (`git show 55dd973:data/briefs/manifest.json`) and not of the current one, which schedules 20 of 20 with zero deferrals and totals 8,266 B. The committed `resilience/artifacts/degradation.json` is the synthetic-split sweep while the README's fault-tolerance table is a DOTA re-run whose artifact was not committed, so the dashboard renders the older shape, including a band-dropout caption the README has already corrected. And "the maximum confidence this model produces anywhere is 0.683" is a maximum over one sweep's tiles; a 96-tile stride sample finds 0.7143.
+Three cases, all named in this document. The "15.8 KB, 104 detections, five oversize deferrals" figures are true of the previous corpus (`git show 55dd973:data/briefs/manifest.json`) and not of the current one, which schedules 20 of 20 with zero deferrals and totals 8,266 B. The committed `resilience/artifacts/degradation.json` *was* the synthetic-split sweep while the README's fault-tolerance table quoted an uncommitted DOTA re-run, so for a while the dashboard rendered a shape the README had already corrected. That one is closed: `degradation_dota.json` is committed, both documents read from it, and the dashboard prefers it. And "the maximum confidence this model produces anywhere is 0.683" is a maximum over one sweep's tiles; a 96-tile stride sample finds 0.7143.
 
 What that says about the rest: every number in the README has a script, and the ones that drifted are the ones a script produces into a *file* while the prose was written by hand. The numbers backed by committed artifacts (`quant_benchmark.json`, `accuracy_int8.json`, `rate_distortion.json`, `docs/latency/*.json`) reproduce exactly, and I checked them for this document. The general defence is the one section 1 draws: derived prose needs a dependency graph, and the only ones available are code generation or an assertion in a test.
 

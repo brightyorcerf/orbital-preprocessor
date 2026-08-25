@@ -1,0 +1,578 @@
+{
+  "generator": "resilience/degradation.py",
+  "model": "model/artifacts/osp_yolov8n_int8.onnx",
+  "weight_bits": 25026816,
+  "tiles_per_eval": 96,
+  "seeds_per_point": 3,
+  "split": "held-out validation",
+  "note": "Bit flips are placed uniformly over the quantised weight bit population. This is a conditional measurement, not a radiation model: it says what survives given N flips, and nothing about how often N flips occur.",
+  "seu": [
+    {
+      "flips": 0,
+      "seeds": 1,
+      "mean": {
+        "map50": 0.8362,
+        "map50_95": 0.5237,
+        "detections_above_conf": 856,
+        "classes_scored": 4
+      },
+      "runs": [
+        {
+          "map50": 0.8362,
+          "map50_95": 0.5237,
+          "detections_above_conf": 856,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 1.0,
+      "fraction_of_weight_bits": 0.0
+    },
+    {
+      "flips": 256,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8431,
+        "map50_95": 0.5224,
+        "detections_above_conf": 851.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.8485,
+          "map50_95": 0.5289,
+          "detections_above_conf": 848,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.837,
+          "map50_95": 0.5208,
+          "detections_above_conf": 853,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8438,
+          "map50_95": 0.5174,
+          "detections_above_conf": 853,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 1.0083,
+      "fraction_of_weight_bits": 1.0229e-05
+    },
+    {
+      "flips": 1024,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8414,
+        "map50_95": 0.5214,
+        "detections_above_conf": 851.0,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.8429,
+          "map50_95": 0.5236,
+          "detections_above_conf": 849,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8367,
+          "map50_95": 0.5207,
+          "detections_above_conf": 853,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8447,
+          "map50_95": 0.5198,
+          "detections_above_conf": 851,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 1.0062,
+      "fraction_of_weight_bits": 4.0916e-05
+    },
+    {
+      "flips": 4096,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8194,
+        "map50_95": 0.5095,
+        "detections_above_conf": 834.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.8308,
+          "map50_95": 0.5208,
+          "detections_above_conf": 814,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8178,
+          "map50_95": 0.5124,
+          "detections_above_conf": 851,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8097,
+          "map50_95": 0.4954,
+          "detections_above_conf": 838,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9799,
+      "fraction_of_weight_bits": 0.000163664
+    },
+    {
+      "flips": 8192,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8161,
+        "map50_95": 0.4942,
+        "detections_above_conf": 816.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.8195,
+          "map50_95": 0.502,
+          "detections_above_conf": 796,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8249,
+          "map50_95": 0.4852,
+          "detections_above_conf": 800,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.804,
+          "map50_95": 0.4953,
+          "detections_above_conf": 853,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.976,
+      "fraction_of_weight_bits": 0.000327329
+    },
+    {
+      "flips": 16384,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8007,
+        "map50_95": 0.4782,
+        "detections_above_conf": 642.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.7776,
+          "map50_95": 0.4686,
+          "detections_above_conf": 720,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8077,
+          "map50_95": 0.4741,
+          "detections_above_conf": 365,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.8167,
+          "map50_95": 0.492,
+          "detections_above_conf": 843,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.9575,
+      "fraction_of_weight_bits": 0.000654658
+    },
+    {
+      "flips": 32768,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.6219,
+        "map50_95": 0.3471,
+        "detections_above_conf": 475.0,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.6418,
+          "map50_95": 0.3438,
+          "detections_above_conf": 568,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.6572,
+          "map50_95": 0.3786,
+          "detections_above_conf": 219,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.5667,
+          "map50_95": 0.3188,
+          "detections_above_conf": 638,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.7437,
+      "fraction_of_weight_bits": 0.001309316
+    },
+    {
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.3383,
+        "map50_95": 0.174,
+        "detections_above_conf": 224.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.3588,
+          "map50_95": 0.1873,
+          "detections_above_conf": 214,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.2622,
+          "map50_95": 0.1227,
+          "detections_above_conf": 20,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.3938,
+          "map50_95": 0.2119,
+          "detections_above_conf": 440,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.4046,
+      "fraction_of_weight_bits": 0.002618631
+    },
+    {
+      "flips": 131072,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0301,
+        "map50_95": 0.0111,
+        "detections_above_conf": 44.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0068,
+          "map50_95": 0.0019,
+          "detections_above_conf": 99,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0463,
+          "map50_95": 0.0195,
+          "detections_above_conf": 0,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0373,
+          "map50_95": 0.0119,
+          "detections_above_conf": 35,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.036,
+      "fraction_of_weight_bits": 0.005237262
+    },
+    {
+      "flips": 262144,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0001,
+        "map50_95": 0.0,
+        "detections_above_conf": 1.3333,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0,
+          "map50_95": 0.0,
+          "detections_above_conf": 4,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0003,
+          "map50_95": 0.0001,
+          "detections_above_conf": 0,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0001,
+          "map50_95": 0.0,
+          "detections_above_conf": 0,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.0001,
+      "fraction_of_weight_bits": 0.010474525
+    },
+    {
+      "flips": 524288,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0001,
+        "map50_95": 0.0,
+        "detections_above_conf": 1340.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0001,
+          "map50_95": 0.0,
+          "detections_above_conf": 2063,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0001,
+          "map50_95": 0.0,
+          "detections_above_conf": 1339,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0001,
+          "map50_95": 0.0,
+          "detections_above_conf": 620,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.0001,
+      "fraction_of_weight_bits": 0.020949049
+    },
+    {
+      "flips": 1048576,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0002,
+        "map50_95": 0.0,
+        "detections_above_conf": 16547.6667,
+        "classes_scored": 4.0
+      },
+      "runs": [
+        {
+          "map50": 0.0002,
+          "map50_95": 0.0,
+          "detections_above_conf": 10441,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0003,
+          "map50_95": 0.0,
+          "detections_above_conf": 25485,
+          "classes_scored": 4
+        },
+        {
+          "map50": 0.0002,
+          "map50_95": 0.0,
+          "detections_above_conf": 13717,
+          "classes_scored": 4
+        }
+      ],
+      "map50_retained": 0.0002,
+      "fraction_of_weight_bits": 0.041898098
+    }
+  ],
+  "seu_by_bit_position": [
+    {
+      "bit": 0,
+      "weight_delta": 1,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8387,
+        "map50_95": 0.5238,
+        "detections_above_conf": 854.0,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 1.003
+    },
+    {
+      "bit": 1,
+      "weight_delta": 2,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8457,
+        "map50_95": 0.5203,
+        "detections_above_conf": 853.0,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 1.0114
+    },
+    {
+      "bit": 2,
+      "weight_delta": 4,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.842,
+        "map50_95": 0.5245,
+        "detections_above_conf": 858.3333,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 1.0069
+    },
+    {
+      "bit": 3,
+      "weight_delta": 8,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.8301,
+        "map50_95": 0.5109,
+        "detections_above_conf": 841.3333,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 0.9927
+    },
+    {
+      "bit": 4,
+      "weight_delta": 16,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.7957,
+        "map50_95": 0.4822,
+        "detections_above_conf": 803.0,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 0.9516
+    },
+    {
+      "bit": 5,
+      "weight_delta": 32,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.6232,
+        "map50_95": 0.3621,
+        "detections_above_conf": 635.3333,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 0.7453
+    },
+    {
+      "bit": 6,
+      "weight_delta": 64,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.1304,
+        "map50_95": 0.0615,
+        "detections_above_conf": 263.6667,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 0.1559
+    },
+    {
+      "bit": 7,
+      "weight_delta": -128,
+      "flips": 65536,
+      "seeds": 3,
+      "mean": {
+        "map50": 0.0001,
+        "map50_95": 0.0,
+        "detections_above_conf": 42.6667,
+        "classes_scored": 4.0
+      },
+      "map50_retained": 0.0001
+    }
+  ],
+  "scrubbing": {
+    "retain_threshold": 0.95,
+    "tolerable_flips": 16384,
+    "fraction_of_weight_bits": 0.000654658,
+    "upset_rate_provenance": "ASSUMED \u2014 no flight hardware, no test report",
+    "intervals_hours": {
+      "1e-05": 1571.18,
+      "1e-06": 15711.79,
+      "1e-07": 157117.87,
+      "1e-08": 1571178.69
+    },
+    "check": {
+      "flips": 65536,
+      "tensors_corrupted": 63,
+      "tensors_detected": 63,
+      "all_detected": true,
+      "tensors_repaired": 63,
+      "residual_mismatches": [],
+      "map50_baseline": 0.8362,
+      "map50_corrupted": 0.3588,
+      "map50_after_scrub": 0.8362,
+      "fully_restored": true
+    }
+  },
+  "band_dropout": [
+    {
+      "dropped": "none",
+      "map50": 0.8362,
+      "map50_95": 0.5237,
+      "detections_above_conf": 856,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B2",
+      "map50": 0.7702,
+      "map50_95": 0.4755,
+      "detections_above_conf": 802,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B3",
+      "map50": 0.8471,
+      "map50_95": 0.5134,
+      "detections_above_conf": 857,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B4",
+      "map50": 0.7855,
+      "map50_95": 0.4752,
+      "detections_above_conf": 809,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B8",
+      "map50": 0.844,
+      "map50_95": 0.5119,
+      "detections_above_conf": 821,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B11",
+      "map50": 0.8334,
+      "map50_95": 0.5134,
+      "detections_above_conf": 858,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B12",
+      "map50": 0.8429,
+      "map50_95": 0.5148,
+      "detections_above_conf": 854,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "B11+B12",
+      "map50": 0.7907,
+      "map50_95": 0.4863,
+      "detections_above_conf": 822,
+      "classes_scored": 4
+    },
+    {
+      "dropped": "all",
+      "map50": 0.0,
+      "map50_95": 0.0,
+      "detections_above_conf": 0,
+      "classes_scored": 4
+    }
+  ]
+}

@@ -569,7 +569,7 @@ def compute_mission_plan(
     import datetime as _dt
 
     from config.platforms import get_profile
-    from orbital.downlink import BriefCandidate, DownlinkScheduler
+    from orbital.downlink import RAW_TILE_BYTES_CCSDS, BriefCandidate, DownlinkScheduler
     from orbital.passes import next_pass
     from orbital.propagate import propagator_for
     from orbital.stations import get_station
@@ -616,7 +616,7 @@ def compute_mission_plan(
     d["_latency_hours"] = (window.aos_utc - after).total_seconds() / 3600.0
     d["_summary"] = plan.summary()
     d["_capacity_briefs"] = plan.capacity_in_briefs()
-    d["_raw_tile_bytes"] = 640 * 640 * 6 * 4
+    d["_raw_tile_bytes"] = RAW_TILE_BYTES_CCSDS
     d["_raw_passes"] = plan.raw_downlink_passes(len(candidates), d["_raw_tile_bytes"])
     d["_n_tiles"] = len(candidates)
     d["_passes_per_day"] = passes_per_day
@@ -686,7 +686,8 @@ def render_mission_plan(plan: dict) -> None:
     st.markdown(
         f"<div class='mission-strip' style='display:block; line-height:1.7;'>"
         f"<b>The same observations as raw imagery:</b> "
-        f"{plan['_n_tiles']} tiles x 9.83 MB = {raw_mb:,.0f} MB. "
+        f"{plan['_n_tiles']} tiles x {plan['_raw_tile_bytes'] / 1e6:.2f} MB "
+        f"(CCSDS 123 lossless) = {raw_mb:,.0f} MB. "
         f"At this window's {b['usable_bytes'] / 1e6:.2f} MB, that is "
         f"<b>{passes:,.0f} contacts</b> (~{days:,.0f} days at "
         f"{plan.get('_passes_per_day', 2.0):.1f} usable passes/day) versus "
@@ -805,7 +806,17 @@ def render_header(platform_key: str | None) -> None:
 # the sweep is minutes of CPU, and a dashboard that silently recomputed it
 # would be showing a different number every time it was opened.
 
-RESILIENCE_ARTIFACT = Path(__file__).parent.parent / "resilience" / "artifacts" / "degradation.json"
+# The DOTA sweep is the one to render: it is measured on the same real corpus
+# every other number on this page comes from. The synthetic sweep is kept as a
+# fallback for a checkout that has not regenerated it, and nothing else. For a
+# while this page rendered the synthetic run while the README quoted the DOTA
+# one, so the live page showed a shape the document had already retracted.
+_ARTIFACT_DIR = Path(__file__).parent.parent / "resilience" / "artifacts"
+RESILIENCE_ARTIFACT = next(
+    (p for p in (_ARTIFACT_DIR / "degradation_dota.json",
+                 _ARTIFACT_DIR / "degradation.json") if p.exists()),
+    _ARTIFACT_DIR / "degradation_dota.json",
+)
 
 FAILURE_MODES = [
     ("Model crash or execution provider fault",
@@ -827,8 +838,8 @@ FAILURE_MODES = [
      "Not always detectable. Documented gap, no integrity check on the wire",
      "test_a_single_flipped_byte_can_survive_ingest_undetected"),
     ("Bit flips in INT8 weights",
-     "Not detectable at all. The model runs and returns confident nonsense",
-     "test_an_upset_model_still_loads_and_runs"),
+     "Invisible to the model. Caught out of band by a CRC-32 scrub, repaired from the golden copy",
+     "test_an_upset_model_still_loads_and_runs, tests/test_protect.py"),
 ]
 
 
@@ -903,13 +914,68 @@ def render_resilience_panel() -> None:
         f"Single-event upsets injected into the {data['weight_bits']:,} bits of "
         f"quantised weight memory, scored over {data['tiles_per_eval']} held-out "
         f"tiles, {data['seeds_per_point']} random draws per point. "
-        "Read the two lines together. Accuracy holds to roughly 0.1% of weight "
-        "memory and then collapses, and as it collapses the model emits **more** "
-        "detections, not fewer: 119 at baseline against 6,573 at the far end. "
-        "The failure mode is not silence, it is confident nonsense, and nothing "
-        "in the stack raises. This is the one fault on the table above that the "
-        "declared fallback cannot catch, because there is no error to catch."
+        "Read the two lines together, and read the dotted one to the end. "
+        "Accuracy holds to roughly 0.07% of weight memory and then collapses. "
+        "Detections fall with it, and then past 1% of weight memory they "
+        "**explode**: "
+        f"{seu[0]['mean']['detections_above_conf']:,.0f} at baseline, "
+        f"{max(r['mean']['detections_above_conf'] for r in seu):,.0f} at the far "
+        "end, essentially all of it wrong. The failure mode is not silence, it "
+        "is confident nonsense, and nothing in the stack raises. The declared "
+        "fallback cannot catch this, because there is no error to catch."
     )
+
+    scrub = data.get("scrubbing")
+    if scrub:
+        chk = scrub["check"]
+        st.markdown(
+            "**What catches it instead.** A CRC-32 per weight tensor, 252 B of "
+            "state against a 3.69 MB artifact, verified out of band so it never "
+            "asks the model anything. `resilience/protect.py` detects the "
+            "corruption and repairs it from a golden copy, which is standard "
+            "flight practice rather than an invention here."
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Corrupted tensors detected",
+                  f"{chk['tensors_detected']}/{chk['tensors_corrupted']}")
+        c2.metric("mAP@0.5 while corrupted", f"{chk['map50_corrupted']:.3f}",
+                  delta=f"{chk['map50_corrupted'] - chk['map50_baseline']:+.3f}")
+        c3.metric("mAP@0.5 after scrub", f"{chk['map50_after_scrub']:.3f}",
+                  delta="restored exactly" if chk["fully_restored"] else "not restored")
+        st.caption(
+            f"{chk['flips']:,} flips across {chk['tensors_corrupted']} tensors. "
+            f"The detector holds 95% of baseline through "
+            f"{scrub['tolerable_flips']:,} flips "
+            f"({scrub['fraction_of_weight_bits'] * 100:.3f}% of weight memory), "
+            "which turns into a scrub interval once you supply an upset rate: "
+            + ", ".join(f"{r} upsets/bit/day gives every {h / 24:,.0f} days"
+                        for r, h in list(scrub["intervals_hours"].items())[:3])
+            + ". That rate is ASSUMED, not measured: OSP has no flight hardware "
+            "and no radiation test report. Everything downstream of it is "
+            "linear, so a real device's test data rescales this without "
+            "rerunning anything."
+        )
+
+    by_bit = data.get("seu_by_bit_position", [])
+    if by_bit:
+        with st.expander("Which bits actually matter"):
+            st.dataframe(pd.DataFrame([
+                {"Bit": r["bit"], "Weight moves by": r["weight_delta"],
+                 "mAP@0.5": r["mean"]["map50"],
+                 "Retained": round(r.get("map50_retained", 0.0), 3)}
+                for r in by_bit
+            ]), width="stretch", hide_index=True)
+            st.caption(
+                "The same flip count confined to one bit position at a time. "
+                "An INT8 weight is two's complement, so bit 7 moves it by 128 "
+                "quantisation steps and bit 0 by one. The bottom half of the "
+                "byte is free; the top half is where the model lives. "
+                "Protecting only the top four bits would buy essentially all "
+                "the available safety for half the state. The uniform curve "
+                "above averages these eight populations together and hides it. "
+                "Retention slightly above 1.0 in the low bits is the noise "
+                "floor of a 24-tile evaluation, not radiation helping."
+            )
 
     bands = data.get("band_dropout", [])
     if bands:
@@ -923,16 +989,22 @@ def render_resilience_panel() -> None:
                 width="stretch",
                 hide_index=True,
             )
+            _base = next((b["map50"] for b in bands if b["dropped"] == "none"), None)
+            _swir = next((b["map50"] for b in bands if b["dropped"] == "B11+B12"), None)
             st.caption(
-                "Zeroing any single band, including the B11/B12 short-wave "
-                "infrared pair, costs this model nothing measurable. That "
-                "contradicts the stated reason for carrying 6 bands at all. "
+                (f"Baseline {_base:.3f}. Losing the B11/B12 short-wave infrared "
+                 f"pair costs {_base - _swir:.3f} mAP. " if _base and _swir else "")
+                + "Real, but far less than the stated reason for carrying six "
+                "bands would predict, and several single-band rows score at or "
+                "above baseline, which is the noise floor of a 24-tile "
+                "evaluation rather than a band being worse than useless. "
                 "The `all` row is a control, not a scenario: it confirms the "
-                "harness is biting, so the null results above are real. "
-                "The honest reading is that the synthetic corpus paints objects "
-                "with high contrast into every band, so it cannot test the "
-                "infrared argument. Retraining on real imagery is what would "
-                "settle it."
+                "harness is biting, so the small numbers above are real. "
+                "The honest reading is that these six bands are a fixed linear "
+                "map of RGB (`prep_manifest.json` says so outright), so the "
+                "infrared planes carry no information the visible ones did not. "
+                "This corpus cannot test the infrared argument. A sensor that "
+                "measured B11 and B12 independently is what would settle it."
             )
 
 

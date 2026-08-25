@@ -26,12 +26,14 @@
   "totals": {
     "briefs": 20,
     "anomalies": 21,
-    "wire_bytes": 8266
+    "wire_bytes": 8266,
+    "raw_ccsds_bytes": 12234137
   },
   "briefs": [
     {
       "scene_id": "P0007_00000_01497",
       "file": "P0007_00000_01497.json",
+      "raw_ccsds_bytes": 672402,
       "thumbnail": "thumbs/P0007_00000_01497.jpg",
       "anomaly_count": 0,
       "wire_bytes": 320,
@@ -40,6 +42,7 @@
     {
       "scene_id": "P0019_00000_00480",
       "file": "P0019_00000_00480.json",
+      "raw_ccsds_bytes": 604484,
       "thumbnail": "thumbs/P0019_00000_00480.jpg",
       "anomaly_count": 2,
       "wire_bytes": 500,
@@ -48,6 +51,7 @@
     {
       "scene_id": "P0019_00000_00960",
       "file": "P0019_00000_00960.json",
+      "raw_ccsds_bytes": 570536,
       "thumbnail": "thumbs/P0019_00000_00960.jpg",
       "anomaly_count": 2,
       "wire_bytes": 502,
@@ -56,6 +60,7 @@
     {
       "scene_id": "P0019_00000_01440",
       "file": "P0019_00000_01440.json",
+      "raw_ccsds_bytes": 602407,
       "thumbnail": "thumbs/P0019_00000_01440.jpg",
       "anomaly_count": 2,
       "wire_bytes": 501,
@@ -64,6 +69,7 @@
     {
       "scene_id": "P0019_00000_01920",
       "file": "P0019_00000_01920.json",
+      "raw_ccsds_bytes": 630207,
       "thumbnail": "thumbs/P0019_00000_01920.jpg",
       "anomaly_count": 1,
       "wire_bytes": 410,
@@ -72,6 +78,7 @@
     {
       "scene_id": "P0019_00480_00480",
       "file": "P0019_00480_00480.json",
+      "raw_ccsds_bytes": 599030,
       "thumbnail": "thumbs/P0019_00480_00480.jpg",
       "anomaly_count": 1,
       "wire_bytes": 409,
@@ -80,6 +87,7 @@
     {
       "scene_id": "P0019_00480_01920",
       "file": "P0019_00480_01920.json",
+      "raw_ccsds_bytes": 607365,
       "thumbnail": "thumbs/P0019_00480_01920.jpg",
       "anomaly_count": 0,
       "wire_bytes": 320,
@@ -88,6 +96,7 @@
     {
       "scene_id": "P0019_00960_00480",
       "file": "P0019_00960_00480.json",
+      "raw_ccsds_bytes": 582496,
       "thumbnail": "thumbs/P0019_00960_00480.jpg",
       "anomaly_count": 1,
       "wire_bytes": 417,
@@ -96,6 +105,7 @@
     {
       "scene_id": "P0019_00960_01920",
       "file": "P0019_00960_01920.json",
+      "raw_ccsds_bytes": 599321,
       "thumbnail": "thumbs/P0019_00960_01920.jpg",
       "anomaly_count": 1,
       "wire_bytes": 411,
@@ -104,6 +114,7 @@
     {
       "scene_id": "P0019_00960_02400",
       "file": "P0019_00960_02400.json",
+      "raw_ccsds_bytes": 655959,
       "thumbnail": "thumbs/P0019_00960_02400.jpg",
       "anomaly_count": 1,
       "wire_bytes": 410,
@@ -112,6 +123,7 @@
     {
       "scene_id": "P0019_01440_00000",
       "file": "P0019_01440_00000.json",
+      "raw_ccsds_bytes": 612576,
       "thumbnail": "thumbs/P0019_01440_00000.jpg",
       "anomaly_count": 0,
       "wire_bytes": 319,
@@ -120,6 +132,7 @@
     {
       "scene_id": "P0019_01440_00480",
       "file": "P0019_01440_00480.json",
+      "raw_ccsds_bytes": 589144,
       "thumbnail": "thumbs/P0019_01440_00480.jpg",
       "anomaly_count": 1,
       "wire_bytes": 407,
@@ -128,6 +141,7 @@
     {
       "scene_id": "P0019_01440_01920",
       "file": "P0019_01440_01920.json",
+      "raw_ccsds_bytes": 573832,
       "thumbnail": "thumbs/P0019_01440_01920.jpg",
       "anomaly_count": 1,
       "wire_bytes": 406,
@@ -136,6 +150,7 @@
     {
       "scene_id": "P0019_01440_02400",
       "file": "P0019_01440_02400.json",
+      "raw_ccsds_bytes": 614964,
       "thumbnail": "thumbs/P0019_01440_02400.jpg",
       "anomaly_count": 2,
       "wire_bytes": 496,
@@ -144,6 +159,7 @@
     {
       "scene_id": "P0019_01440_02880",
       "file": "P0019_01440_02880.json",
+      "raw_ccsds_bytes": 661772,
       "thumbnail": "thumbs/P0019_01440_02880.jpg",
       "anomaly_count": 0,
       "wire_bytes": 320,
@@ -152,6 +168,7 @@
     {
       "scene_id": "P0019_01920_00000",
       "file": "P0019_01920_00000.json",
+      "raw_ccsds_bytes": 623188,
       "thumbnail": "thumbs/P0019_01920_00000.jpg",
       "anomaly_count": 2,
       "wire_bytes": 495,
@@ -160,6 +177,7 @@
     {
       "scene_id": "P0019_01920_00480",
       "file": "P0019_01920_00480.json",
+      "raw_ccsds_bytes": 607693,
       "thumbnail": "thumbs/P0019_01920_00480.jpg",
       "anomaly_count": 0,
       "wire_bytes": 316,
@@ -168,6 +186,7 @@
     {
       "scene_id": "P0019_01920_02400",
       "file": "P0019_01920_02400.json",
+      "raw_ccsds_bytes": 597499,
       "thumbnail": "thumbs/P0019_01920_02400.jpg",
       "anomaly_count": 1,
       "wire_bytes": 408,
@@ -176,6 +195,7 @@
     {
       "scene_id": "P0019_01920_02880",
       "file": "P0019_01920_02880.json",
+      "raw_ccsds_bytes": 648527,
       "thumbnail": "thumbs/P0019_01920_02880.jpg",
       "anomaly_count": 2,
       "wire_bytes": 492,
@@ -184,6 +204,7 @@
     {
       "scene_id": "P0019_02400_00000",
       "file": "P0019_02400_00000.json",
+      "raw_ccsds_bytes": 580735,
       "thumbnail": "thumbs/P0019_02400_00000.jpg",
       "anomaly_count": 1,
       "wire_bytes": 407,

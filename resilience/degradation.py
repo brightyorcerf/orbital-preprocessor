@@ -40,6 +40,7 @@ if str(ROOT) not in sys.path:
 import numpy as np
 
 from resilience.faults import BAND_NAMES, band_dropout, flip_weight_bits
+from resilience.protect import UPSET_RATE_RANGE, scrub, scrub_interval_hours, verify, weight_manifest
 
 MODEL   = ROOT / "model" / "artifacts" / "osp_yolov8n_int8.onnx"
 VAL_IMG = ROOT / "osp_dataset" / "images" / "val"
@@ -125,6 +126,116 @@ def run_seu_sweep(flips, seeds: int, tiles: int, workdir: Path) -> list[dict]:
     return rows
 
 
+#: Where the uniform sweep's knee sits: 32,768 flips costs almost nothing and
+#: 65,536 costs a third of the model. Isolating bit positions at the knee is
+#: what separates "upsets are survivable" from "upsets in the top bits are not".
+BIT_SWEEP_FLIPS = 65536
+
+
+def run_bit_position_sweep(n_flips: int, seeds: int, tiles: int, workdir: Path) -> list[dict]:
+    """
+    The same flip count, confined to one bit position at a time.
+
+    The uniform sweep above draws bit positions evenly, which is the correct
+    physical model and the wrong measurement instrument, because it reports the
+    *average* of eight populations that are worth wildly different amounts. An
+    INT8 weight is two's complement: flipping bit 7 moves it by 128
+    quantisation steps, flipping bit 0 moves it by one. Averaging those hides
+    the only actionable fact in the whole experiment, which is whether the
+    damage is concentrated somewhere cheap to defend.
+
+    Not a scenario. No particle knows which bit it hit. This is the instrument
+    that says where the mitigation budget should go.
+    """
+    from model.evaluate_detector import OnnxBackend
+
+    rows = []
+    for bit in range(8):
+        runs = []
+        for seed in range(seeds):
+            corrupted, _ = flip_weight_bits(
+                MODEL, n_flips, seed=seed, bits=(bit,),
+                out_path=workdir / f"bit_{bit}_{seed}.onnx",
+            )
+            try:
+                runs.append(_score(OnnxBackend(str(corrupted)), tiles))
+            finally:
+                corrupted.unlink(missing_ok=True)
+
+        mean = {k: round(float(np.mean([r[k] for r in runs])), 4) for k in runs[0]}
+        rows.append({"bit": bit, "weight_delta": 1 << bit if bit < 7 else -128,
+                     "flips": n_flips, "seeds": seeds, "mean": mean})
+        print(f"  bit={bit}  delta={rows[-1]['weight_delta']:>5}  "
+              f"mAP50={mean['map50']:.3f}  dets={mean['detections_above_conf']:.0f}")
+    return rows
+
+
+def tolerable_flips(seu_rows: list[dict], retain: float = 0.95) -> int:
+    """
+    The largest flip count in the measured sweep that still retains `retain` of
+    baseline mAP.
+
+    This is the join between the two halves of the SEU story. The sweep is a
+    conditional: given N flips, this much survives. Picking the N where
+    survival stops being acceptable turns it into a budget, and a budget plus
+    an upset rate is a scrub interval. Everything downstream of this number is
+    arithmetic; this is the only place a judgement is made, so it is one line
+    and it is a parameter.
+    """
+    ok = [r["flips"] for r in seu_rows if r.get("map50_retained", 0.0) >= retain]
+    return max(ok) if ok else 0
+
+
+def run_scrub_check(n_flips: int, tiles: int, workdir: Path) -> dict:
+    """
+    Corrupt the model, prove the corruption is detected, repair it, and prove
+    the repaired model scores exactly what the original scored.
+
+    The last clause is the one worth the runtime. A scrub that restores the
+    bytes is easy to believe; what the mission actually needs is that
+    capability comes back with them, and the only way to know that is to score
+    the model again and compare. Exact equality is the right assertion here,
+    not approximate: the repaired weights are byte-identical to the golden
+    copy, so a difference of any size would mean the pipeline is not
+    deterministic and the entire degradation curve is noise.
+    """
+    from model.evaluate_detector import OnnxBackend
+
+    manifest = weight_manifest(MODEL)
+    assert verify(MODEL, manifest) == [], "the golden model fails its own manifest"
+
+    baseline = _score(OnnxBackend(str(MODEL)), tiles)
+
+    bad, flips = flip_weight_bits(MODEL, n_flips, seed=0, out_path=workdir / "scrub_bad.onnx")
+    touched = sorted({f.tensor for f in flips})
+    detected = verify(bad, manifest)
+    damaged = _score(OnnxBackend(str(bad)), tiles)
+
+    fixed, repaired = scrub(bad, MODEL, out_path=workdir / "scrub_fixed.onnx")
+    residual = verify(fixed, manifest)
+    restored = _score(OnnxBackend(str(fixed)), tiles)
+
+    for path in (bad, fixed):
+        path.unlink(missing_ok=True)
+
+    print(f"  {n_flips} flips over {len(touched)} tensors")
+    print(f"  detected {len(detected)}/{len(touched)}   "
+          f"mAP50 {baseline['map50']:.3f} -> {damaged['map50']:.3f} -> {restored['map50']:.3f}")
+
+    return {
+        "flips": n_flips,
+        "tensors_corrupted": len(touched),
+        "tensors_detected": len(detected),
+        "all_detected": detected == touched,
+        "tensors_repaired": len(repaired),
+        "residual_mismatches": residual,
+        "map50_baseline": baseline["map50"],
+        "map50_corrupted": damaged["map50"],
+        "map50_after_scrub": restored["map50"],
+        "fully_restored": restored["map50"] == baseline["map50"],
+    }
+
+
 def run_band_dropout(tiles: int) -> list[dict]:
     """Score the model with each band, and the SWIR pair, held at zero."""
     from model.evaluate_detector import OnnxBackend
@@ -156,6 +267,10 @@ def main() -> int:
     ap.add_argument("--seeds", type=int, default=3,
                     help="random draws per flip count (default 3)")
     ap.add_argument("--flips", type=int, nargs="*", default=list(DEFAULT_FLIPS))
+    ap.add_argument("--bit-sweep-flips", type=int, default=BIT_SWEEP_FLIPS,
+                    help=f"flips per bit position (default {BIT_SWEEP_FLIPS})")
+    ap.add_argument("--retain", type=float, default=0.95,
+                    help="mAP fraction that counts as still working (default 0.95)")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--images", default=str(VAL_IMG),
                     help="validation tiles dir (default: synthetic split)")
@@ -177,6 +292,12 @@ def main() -> int:
     try:
         print("SEU bit-flip sweep")
         seu = run_seu_sweep(args.flips, args.seeds, args.tiles, workdir)
+        print("SEU by bit position")
+        by_bit = run_bit_position_sweep(
+            args.bit_sweep_flips, args.seeds, args.tiles, workdir
+        )
+        print("Scrub: detect and repair")
+        scrub_result = run_scrub_check(args.bit_sweep_flips, args.tiles, workdir)
         print("Spectral band dropout")
         bands = run_band_dropout(args.tiles)
     finally:
@@ -189,6 +310,27 @@ def main() -> int:
             round(row["mean"]["map50"] / baseline, 4) if baseline else 0.0
         )
         row["fraction_of_weight_bits"] = round(row["flips"] / bits, 9)
+    for row in by_bit:
+        row["map50_retained"] = (
+            round(row["mean"]["map50"] / baseline, 4) if baseline else 0.0
+        )
+
+    budget = tolerable_flips(seu, args.retain)
+    scrubbing = {
+        "retain_threshold": args.retain,
+        "tolerable_flips": budget,
+        "fraction_of_weight_bits": round(budget / bits, 9) if bits else 0.0,
+        "upset_rate_provenance": "ASSUMED — no flight hardware, no test report",
+        "intervals_hours": {
+            f"{rate:.0e}": round(scrub_interval_hours(bits, budget, rate), 2)
+            for rate in (UPSET_RATE_RANGE[1], 1e-6, 1e-7, UPSET_RATE_RANGE[0])
+        },
+        "check": scrub_result,
+    }
+    print(f"\nTolerating {budget:,} flips at {args.retain:.0%} of baseline mAP.")
+    for rate, hours in scrubbing["intervals_hours"].items():
+        print(f"  at {rate} upsets/bit/day  ->  scrub every {hours:>10,.1f} h "
+              f"({hours / 24:>8,.1f} days)")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -206,6 +348,8 @@ def main() -> int:
             "how often N flips occur."
         ),
         "seu": seu,
+        "seu_by_bit_position": by_bit,
+        "scrubbing": scrubbing,
         "band_dropout": bands,
     }, indent=2))
     try:

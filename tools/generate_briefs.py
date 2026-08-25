@@ -58,6 +58,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.tiles import list_tiles, read_tile
+from ground.rate_distortion import ccsds_tile_bytes
 
 log = logging.getLogger("generate_briefs")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -258,6 +259,8 @@ def main() -> None:
     ap.add_argument("--satellite", default=DEFAULT_SATELLITE)
     ap.add_argument("--platform", default="skyroot-oam")
     ap.add_argument("--no-thumbnails", action="store_true")
+    ap.add_argument("--no-raw-price", action="store_true",
+                    help="skip CCSDS-123 pricing of the source tiles (~9 s/tile)")
     ap.add_argument("--allow-aerial-gsd", action="store_true",
                     help="Permit running against a DOTA-derived tile split. The "
                          "footprint math is still Sentinel-2's 10 m grid, so "
@@ -371,9 +374,17 @@ def main() -> None:
             render_thumbnail(tile, brief["anomalies"],
                              out_dir / "thumbs" / f"{brief['scene_id']}.jpg")
 
+        # What this tile would have cost to downlink instead of the brief,
+        # under the standard a spacecraft would actually use. Recorded here so
+        # the compression ratio the README quotes is derivable from a committed
+        # artifact rather than asserted next to one. It is the slow part of
+        # this script and the only reason `--no-raw-price` exists.
+        raw_bytes = None if args.no_raw_price else ccsds_tile_bytes(tile)
+
         manifest_briefs.append({
             "scene_id": brief["scene_id"],
             "file": brief_path.name,
+            "raw_ccsds_bytes": raw_bytes,
             "thumbnail": None if args.no_thumbnails else f"thumbs/{brief['scene_id']}.jpg",
             "anomaly_count": brief["anomaly_count"],
             # Wire size excludes `provenance`: that block is documentation for
@@ -416,6 +427,15 @@ def main() -> None:
             "briefs": len(manifest_briefs),
             "anomalies": total_anomalies,
             "wire_bytes": sum(b["wire_bytes"] for b in manifest_briefs),
+            # The denominator of every compression claim in the README. Priced
+            # as CCSDS 123.0-B-1 over the same tiles these briefs describe, so
+            # the ratio compares two things that could both actually be sent.
+            # The float32 in-memory size of a tile is not a downlink cost and
+            # is never used as this denominator.
+            "raw_ccsds_bytes": (
+                None if args.no_raw_price
+                else sum(b["raw_ccsds_bytes"] for b in manifest_briefs)
+            ),
         },
         "briefs": manifest_briefs,
     }
@@ -425,6 +445,10 @@ def main() -> None:
     log.info(f"Wrote {len(manifest_briefs)} briefs → {out_dir}/")
     log.info(f"  total detections : {total_anomalies}")
     log.info(f"  total wire bytes : {manifest['totals']['wire_bytes']:,} B")
+    raw_total = manifest["totals"]["raw_ccsds_bytes"]
+    if raw_total:
+        log.info(f"  same tiles, raw  : {raw_total:,} B (CCSDS 123)")
+        log.info(f"  ratio            : {raw_total / manifest['totals']['wire_bytes']:,.0f}:1")
     log.info(f"  manifest         : {out_dir}/manifest.json")
     log.info("─" * 68)
 

@@ -356,6 +356,28 @@ class SchedulerDecision:
         return asdict(self)
 
 
+#: MEASURED. Mean cost of one 640 x 640 x 6 tile under CCSDS 123.0-B-1, the
+#: lossless standard for compressing image cubes on board a spacecraft:
+#: 12,234,137 B over the committed 20-tile corpus, divided by 20.
+#: `tools/generate_briefs.py` records the per-tile figure as `raw_ccsds_bytes`
+#: in `data/briefs/manifest.json`, and `ground/ccsds123.py` is the encoder.
+#:
+#: Where this is generous to the alternative, stated because it decides the
+#: headline ratio: CCSDS 123 reaches 1.99 bits per sample on this corpus, which
+#: is better than it would manage on a real instrument. Five of these six bands
+#: are linear functions of the first three (`prep_manifest.json` says so
+#: outright), so the inter-band predictor is exploiting redundancy a measuring
+#: sensor would not hand it. A real multispectral cube costs more per tile than
+#: this, which makes this baseline stronger than the honest one and keeps the
+#: comparison unkind to OSP.
+RAW_TILE_BYTES_CCSDS = 611_707
+
+#: The float32 working-set size of the same tile. This is what memory holds,
+#: not what a link carries, and it is never the denominator of a compression
+#: ratio. Kept named so that the distinction is visible rather than implied.
+RAW_TILE_BYTES_FLOAT32 = 640 * 640 * 6 * 4
+
+
 @dataclass(frozen=True)
 class DownlinkPlan:
     """
@@ -396,21 +418,23 @@ class DownlinkPlan:
         """
         return self.usable_bytes / raw_scene_bytes
 
-    def raw_downlink_passes(self, n_tiles: int, raw_tile_bytes: int = 9_830_400) -> float:
+    def raw_downlink_passes(
+        self, n_tiles: int, raw_tile_bytes: int = RAW_TILE_BYTES_CCSDS
+    ) -> float:
         """
         How many contacts like this one it would take to downlink the *source
         imagery* for the same observations, instead of the briefs.
 
-        This is the comparison the project exists to make, and it is the one
-        number here that is fully derived from measured quantities: the raw tile
-        size is 640 x 640 x 6 bands x 4 bytes = 9,830,400 B, exactly what the
-        inference engine loaded, and the usable window bytes come from the
-        propagated pass. No modelling assumption sits between them beyond the
-        link derating already declared.
+        This is the comparison the project exists to make, so the denominator
+        has to be a number a spacecraft could actually put on a wire.
 
-        The ratio is stark enough that it needs no embellishment: a brief is
-        ~800 B against ~9.8 MB of pixels, so the same window either returns
-        every observation with room to spare, or a few percent of one image.
+        It used to be 9,830,400 B: 640 x 640 x 6 bands x 4 bytes, the float32
+        array the inference engine holds in memory. That was wrong, and wrong
+        in the direction that flattered this project. An in-memory array is not
+        a downlink cost. Nothing transmits an uncompressed float32 buffer, and
+        pricing the alternative that way meant OSP was being compared against
+        no codec at all rather than against a real one. It overstated the
+        advantage by 16x. See `RAW_TILE_BYTES_CCSDS`.
         """
         if self.usable_bytes <= 0:
             return float("inf")

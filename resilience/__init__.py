@@ -37,6 +37,19 @@ The four faults, and why these four
    A truncated or malformed brief must be quarantined by the ground segment,
    never crash the scheduler, and never silently become a valid-looking plan.
 
+Measuring a fault is half the job
+─────────────────────────────────
+For a while this package only broke things. Every fault above was injected and
+scored, and none of them was defended, which left the SEU result at an
+uncomfortable place: a number saying how much capability a bit flip costs, and
+no answer to what a spacecraft does about it.
+
+`resilience/protect.py` is the other half. A CRC-32 per weight tensor detects
+an upset for 4 bytes of state; a golden copy repairs it; and the measured
+degradation curve sets how long the model may go unscrubbed before upsets
+accumulate past what it tolerates. That last step is what turns the
+conditional measurement into an operational one.
+
 What this package is not
 ────────────────────────
 It is not a radiation model. Bit flips are placed uniformly at random in the
@@ -45,6 +58,12 @@ section and says nothing about rate. It answers a conditional question: *given*
 that N bits have flipped, what survives.
 """
 
+from resilience.protect import (
+    scrub,
+    scrub_interval_hours,
+    verify,
+    weight_manifest,
+)
 from resilience.faults import (
     CrashingSession,
     StallingSession,
@@ -63,4 +82,8 @@ __all__ = [
     "flip_weight_bits",
     "inject_crash",
     "inject_stall",
+    "scrub",
+    "scrub_interval_hours",
+    "verify",
+    "weight_manifest",
 ]

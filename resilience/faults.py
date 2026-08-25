@@ -84,6 +84,7 @@ def flip_weight_bits(
     n_flips: int,
     seed: int = 0,
     out_path: Optional[str | Path] = None,
+    bits: Optional[Iterable[int]] = None,
 ) -> tuple[Path, list[BitFlip]]:
     """
     Write a copy of an INT8 ONNX model with `n_flips` random weight bits flipped.
@@ -92,6 +93,13 @@ def flip_weight_bits(
     a bit is equally likely to be picked anywhere in the model's weight memory
     rather than equally likely per tensor. A per-tensor choice would badly
     over-sample the small layers.
+
+    `bits` restricts which bit positions may flip. Left as None it is all eight,
+    which is the right null model for a particle strike: the hardware has no
+    idea which bit is the sign bit. Constraining it to a single position is not
+    a physical scenario, it is a measurement instrument — averaging over all
+    eight hides the fact that the eight are worth wildly different amounts, and
+    that fact is the one that decides whether cheap mitigation is possible.
 
     Returns (path to the corrupted model, the flips that were applied). The
     flip list is what makes a degradation curve reproducible: same seed, same
@@ -111,7 +119,10 @@ def flip_weight_bits(
 
     rng = random.Random(seed)
     sizes = [arr.size for _, arr in targets]
-    total_bits = sum(sizes) * 8
+    bit_choices = list(range(8)) if bits is None else [int(b) for b in bits]
+    if not bit_choices or any(not 0 <= b < 8 for b in bit_choices):
+        raise ValueError(f"bit positions must lie in 0..7, got {bits}")
+    total_bits = sum(sizes) * len(bit_choices)
 
     if n_flips > total_bits:
         raise ValueError(f"{n_flips} flips requested, model holds {total_bits} weight bits")
@@ -124,7 +135,7 @@ def flip_weight_bits(
         init, arr = rng.choices(targets, weights=sizes, k=1)[0]
         buf = buffers[init.name]
         idx = rng.randrange(buf.size)
-        bit = rng.randrange(8)
+        bit = rng.choice(bit_choices)
 
         flat = buf.reshape(-1)
         # XOR in the unsigned domain, then reinterpret: numpy will not let you
@@ -143,7 +154,8 @@ def flip_weight_bits(
         init.CopyFrom(numpy_helper.from_array(buffers[init.name], init.name))
 
     if out_path is None:
-        out_path = model_path.with_name(f"{model_path.stem}_seu{n_flips}_s{seed}.onnx")
+        tag = "" if bits is None else "b" + "".join(str(b) for b in sorted(bit_choices))
+        out_path = model_path.with_name(f"{model_path.stem}_seu{n_flips}{tag}_s{seed}.onnx")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     onnx.save(model, str(out_path))
