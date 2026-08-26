@@ -105,7 +105,8 @@ Left of the line runs on a compute budget. Right of the line does not. The 88 ms
 the INT8 inference median at two cores, the constraint the left column is under; the
 full distribution is in [Latency](#latency).
 
-![OSP command centre](docs/img.jpg)
+![OSP command centre, downlink briefing view](docs/dashboard_briefing.png)
+![OSP command centre, orbit and contact geometry in 3D](docs/dashboard_orbit3d.png)
 
 ---
 
