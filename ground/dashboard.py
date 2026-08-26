@@ -25,6 +25,7 @@ Features:
 """
 
 import json
+import datetime as _dt
 import os
 import sys
 from pathlib import Path
@@ -195,6 +196,128 @@ st.markdown(f"""
         color: #f5f5f5;
         font-size: 18px;
         letter-spacing: 0.5px;
+    }}
+    /* Sample size under a headline figure. A score without its denominator
+       is not a result, and the denominator should not cost a second glance. */
+    .mission-stat .sub {{
+        font-size: 9px;
+        letter-spacing: 1px;
+        color: #6b6b6b;
+        margin-top: 2px;
+    }}
+
+    /* ── Hero console ──────────────────────────────────────────────────────
+       The first screen is an instrument panel, not a report about one. The
+       countdown, the budget bar and the instrument row are the three things a
+       mission operator would actually look at, so they are the three things
+       above the fold and nothing else competes with them. */
+    .hero {{
+        position: relative;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 8px;
+        padding: 26px 30px 22px;
+        margin: 6px 0 26px;
+        background:
+            radial-gradient(1200px 220px at 12% -40%, rgba(120,170,255,0.10), transparent 70%),
+            linear-gradient(180deg, rgba(14,16,20,0.96) 0%, rgba(6,7,9,0.96) 100%);
+        overflow: hidden;
+    }}
+    /* A slow sweep across the top edge. The only decorative motion on the
+       page, and it is one line of CSS rather than a script. */
+    .hero::after {{
+        content: "";
+        position: absolute; top: 0; left: -40%;
+        width: 40%; height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(150,200,255,0.75), transparent);
+        animation: sweep 7s linear infinite;
+    }}
+    @keyframes sweep {{ to {{ left: 120%; }} }}
+
+    .hero-countdown {{
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 46px;
+        line-height: 1.05;
+        color: #f5f5f5;
+        letter-spacing: 2px;
+        font-variant-numeric: tabular-nums;
+    }}
+    .hero-countdown .unit {{ font-size: 20px; color: #7d8590; margin-left: 2px; }}
+    .hero-label {{
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+        color: #7d8590; margin-bottom: 6px;
+    }}
+    .hero-sub {{
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px; color: #8b949e; margin-top: 6px;
+    }}
+
+    /* Link budget: the page's central constraint, drawn as something being
+       consumed rather than stated as a percentage. */
+    .budget-track {{
+        position: relative;
+        height: 10px; border-radius: 5px; margin-top: 10px;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.08);
+        overflow: hidden;
+    }}
+    .budget-fill {{
+        height: 100%;
+        background: linear-gradient(90deg, #4b9fff, #8fd0ff);
+        box-shadow: 0 0 12px rgba(90,160,255,0.55);
+    }}
+    .budget-scale {{
+        display: flex; justify-content: space-between;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px; color: #6b7280; margin-top: 5px;
+    }}
+
+    .instrument-row {{
+        display: flex; flex-wrap: wrap; gap: 26px;
+        margin-top: 20px; padding-top: 18px;
+        border-top: 1px solid rgba(255,255,255,0.07);
+    }}
+    .instrument {{ display: flex; flex-direction: column; min-width: 104px; }}
+    .instrument .k {{
+        font-family: 'Titillium Web', sans-serif;
+        font-size: 9px; letter-spacing: 1.6px; text-transform: uppercase;
+        color: #6b7280;
+    }}
+    .instrument .v {{
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 21px; color: #f5f5f5; margin-top: 3px;
+        font-variant-numeric: tabular-nums;
+    }}
+    .instrument .q {{ font-size: 9px; color: #6b7280; margin-top: 2px; letter-spacing: 0.6px; }}
+    .instrument .v.ok {{ color: #7ee787; }}
+
+    /* ── Desktop-only gate ─────────────────────────────────────────────────
+       Streamlit's sidebar becomes a translucent full-viewport overlay on a
+       phone, with the page bleeding through behind it. Rather than fight that
+       and ship something that reads as a rendering bug, the console is hidden
+       below the breakpoint and replaced with a deliberate message. */
+    .mobile-gate {{ display: none; }}
+    @media (max-width: 820px) {{
+        .mobile-gate {{
+            display: block;
+            margin: 20vh auto 0; max-width: 340px; text-align: center;
+            font-family: 'Titillium Web', sans-serif; color: #d4d4d4;
+        }}
+        .mobile-gate .mg-title {{
+            font-size: 13px; letter-spacing: 2.5px; text-transform: uppercase;
+            color: #f5f5f5; margin-bottom: 10px;
+        }}
+        .mobile-gate .mg-body {{ font-size: 13px; color: #8b949e; line-height: 1.6; }}
+        section[data-testid="stSidebar"] {{ display: none !important; }}
+        /* Hide every top-level block in the main column except the one that
+           contains the gate. `:has()` is what makes this survivable: Streamlit
+           owns the wrapper divs and does not let us put a class on them, so
+           the block is selected by what it contains rather than by what it is
+           called. An earlier attempt matched on a class we controlled, which
+           does not exist in the rendered tree, so it hid the gate too. */
+        [data-testid="stMain"] [data-testid="stVerticalBlock"] > div:not(:has(.mobile-gate)) {{
+            display: none !important;
+        }}
     }}
 
     /* Header: thesis + authority state. Deliberately the densest thing on the
@@ -390,6 +513,68 @@ def conf_color(conf: float) -> str:
             return color
     return "#8b8b8b"
 
+#: Brief cards rendered alongside the map, before the queue goes full width.
+#: Four is roughly the map's own height, so the two-column band ends level
+#: instead of leaving one side empty for several screens.
+QUEUE_BESIDE_MAP = 4
+
+
+def render_brief_card(payload: dict) -> None:
+    """
+    One brief: scene id, capture time, its detections, and the tile it saw.
+
+    Extracted from the queue loop so the same card renders both beside the
+    map and in the full-width grid below it, rather than the layout owning a
+    private copy of how a brief looks.
+    """
+    scene_id  = payload.get("scene_id", "?")
+    ts        = payload.get("timestamp_utc", "")[:19].replace("T", " ")
+    anomalies = payload.get("anomalies", [])
+
+    if not anomalies:
+        cards_html = (
+            "<div style='color:#8b8b8b; font-family:monospace; font-size:12px;'>"
+            "NO ANOMALIES DETECTED IN SECTOR.</div>"
+        )
+    else:
+        cards_html = "".join(
+            render_timeline_card(
+                a.get("type", "unknown"),
+                a.get("conf", 0),
+                a.get("lat_lon", [0, 0])[0],
+                a.get("lat_lon", [0, 0])[1],
+                conf_color(a.get("conf", 0)),
+            )
+            for a in anomalies
+        )
+
+    st.markdown(
+        f"""<div class="glass-panel">
+<h4 class="feed-title">{scene_id}</h4>
+<div class="feed-timestamp">ORBITAL TIMESTAMP: {ts} UTC</div>
+{cards_html}
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+    # The tile the detector actually saw, with the boxes it actually drew.
+    # Collapsed so the feed stays scannable, but present: a detection list
+    # with no way to look at the evidence asks the reader to take the
+    # model's word for it.
+    thumb = payload.get("_thumbnail")
+    if thumb and Path(thumb).exists():
+        with st.expander(f"View tile · {scene_id}"):
+            st.image(
+                thumb,
+                width="stretch",
+                caption=(
+                    "Visible bands (B2/B3/B4), contrast-stretched for display. "
+                    "Boxes are the INT8 model's detections at their true pixel "
+                    "coordinates."
+                ),
+            )
+
+
 def load_payloads_from_dir(directory: str) -> list[dict]:
     payloads = []
     for p in sorted(Path(directory).glob("*.json")):
@@ -416,6 +601,10 @@ def build_folium_map(payloads: list[dict]) -> folium.Map:
         zoom_start=8,
         tiles="CartoDB dark_matter",
         control_scale=True,
+        # The map sits mid-page, so wheel-zoom would swallow the page scroll
+        # every time the cursor crossed it and read as a broken page. Zoom
+        # stays available through the +/- control and double-click.
+        scrollWheelZoom=False,
     )
 
     for payload in payloads:
@@ -492,6 +681,54 @@ def build_folium_map(payloads: list[dict]) -> folium.Map:
 # failure being corrected.
 
 BRIEFS_DIR = Path(__file__).resolve().parent.parent / "data" / "briefs"
+
+
+ACCURACY_ARTIFACT = (
+    Path(__file__).resolve().parent.parent / "model" / "artifacts" / "accuracy_int8.json"
+)
+
+
+@st.cache_data(show_spinner=False)
+def load_detector_accuracy(path: str = str(ACCURACY_ARTIFACT)) -> dict:
+    """
+    The deployed INT8 model's held-out accuracy, from the committed artifact.
+
+    This is the strongest single number the project has and it was not on the
+    page anywhere: a visitor had to scroll past the map, the queue and the
+    audit trail before meeting it in a chart caption. Read from
+    `model/artifacts/accuracy_int8.json` rather than typed, so it cannot
+    drift from the model that produced it.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def provenance_parts(value: str) -> tuple[str, str]:
+    """
+    Split a brief's provenance string into (tag, detail).
+
+    Briefs store provenance as `"<tag> — <detail>"`, where the tag is the
+    trust claim (`real`, `measured`, `approximate`) and the detail is its
+    qualification. Splitting them lets the page lead with the claim, and
+    strips the em dashes on the way out: the separator becomes the layout,
+    and any em dash inside the detail becomes a comma.
+
+    This exists because the page used to hand-type these claims instead of
+    reading them, and got two of the three backwards: it called real DOTA
+    pixels "synthetic" and called an approximate footprint "real". The data
+    was right the whole time and nothing was reading it.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return "", ""
+    tag, sep, detail = value.partition("—")
+    if not sep:
+        return value.strip(), ""
+    return tag.strip(), detail.strip().replace(" — ", ", ").replace("—", "-")
 
 
 @st.cache_data(show_spinner=False)
@@ -719,11 +956,26 @@ def render_mission_plan(plan: dict) -> None:
         "Reasoning": d["detail"],
     } for d in plan["decisions"]]
 
+    # Reasoning carries the whole deterministic-scheduling story and was being
+    # clipped mid-sentence, which is precisely where the argument pays off.
+    # Give it the width and let the short numeric columns stay small.
     st.dataframe(
         pd.DataFrame(rows),
         width="stretch",
         hide_index=True,
         height=min(560, 40 + 36 * len(rows)),
+        column_config={
+            "Scene":      st.column_config.TextColumn(width="small"),
+            "Action":     st.column_config.TextColumn(width="small"),
+            "Priority":   st.column_config.NumberColumn(width="small"),
+            "Bytes":      st.column_config.NumberColumn(width="small"),
+            "Cumulative": st.column_config.NumberColumn(width="small"),
+            "Rule":       st.column_config.TextColumn(width="small"),
+            "Reasoning":  st.column_config.TextColumn(
+                width="large",
+                help="The rule's own explanation for this decision, verbatim.",
+            ),
+        },
     )
 
     deferred_rules = {d["rule"] for d in plan["decisions"] if d["action"] == "defer"}
@@ -749,6 +1001,148 @@ def render_mission_plan(plan: dict) -> None:
 # hardcoded, and always next to its provenance. A profile whose numbers are
 # DERIVED says so here, in the header, not in a footnote: the profile is an
 # engineering envelope, never a claim about anyone's flight hardware.
+
+@st.cache_data(show_spinner=False, ttl=300)
+def next_contact_from_now(satellite: str, station_key: str) -> dict | None:
+    """
+    The next contact window starting from *now*, not from the corpus epoch.
+
+    The mission plan is anchored to the last capture time in the committed
+    corpus, which is a fixed point in the past: the spacecraft cannot downlink
+    an observation it has not made yet, so that is the right anchor for the
+    schedule. It is the wrong anchor for a clock. Counting down to a window
+    that opened days ago is theatre, and it would have rendered "IN CONTACT"
+    to every visitor forever.
+
+    This propagates the same committed TLE against the current wall clock, so
+    the countdown is a real orbital prediction that changes every time the
+    page is opened. Cached for five minutes: the answer moves by seconds, and
+    the fragment re-derives the remaining time locally each tick.
+    """
+    try:
+        from orbital.passes import next_pass
+        from orbital.propagate import propagator_for
+        from orbital.stations import get_station
+        from orbital.tle import load_snapshot
+
+        snapshot = load_snapshot()
+        window = next_pass(
+            propagator_for(satellite, snapshot),
+            get_station(station_key),
+            after=_dt.datetime.now(_dt.timezone.utc),
+            search_hours=48.0,
+        )
+        if window is None:
+            return None
+        return {
+            "aos_utc": window.aos_utc.isoformat(),
+            "los_utc": window.los_utc.isoformat(),
+            "duration_s": window.duration_seconds,
+            "max_elevation_deg": window.max_elevation_deg,
+            "quality": window.quality(),
+        }
+    except Exception:
+        return None
+
+
+@st.fragment(run_every="1s")
+def render_hero(plan: dict, acc: dict, live: dict | None = None) -> None:
+    """
+    The mission console: time to next contact, the link budget being consumed,
+    and the instruments that matter, refreshed once a second.
+
+    Runs as a fragment so the clock ticks without rerunning the page. A full
+    rerun would re-propagate the orbit and re-plan the downlink every second,
+    which is both wasteful and wrong: the plan is a committed decision, not
+    something that should quietly change under the reader while they look at it.
+
+    The countdown is computed here rather than in JavaScript so that the number
+    on screen comes from the same propagated window the schedule was built
+    against. A clock that drifted from the plan it sits above would be worse
+    than no clock.
+    """
+    w, b = plan["window"], plan["budget"]
+    station = plan.get("_station_name", "?")
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    if live:
+        aos = _dt.datetime.fromisoformat(live["aos_utc"])
+        los = _dt.datetime.fromisoformat(live["los_utc"])
+        if now < aos:
+            secs = int((aos - now).total_seconds())
+            hh, rem = divmod(secs, 3600)
+            mm, ss = divmod(rem, 60)
+            clock, clock_label = f"{hh:02d}:{mm:02d}:{ss:02d}", "Time to next contact"
+            sub = (f"AOS {aos:%Y-%m-%d %H:%M:%S} UTC over {station}, "
+                   f"{live['duration_s'] / 60:.1f} min, peak "
+                   f"{live['max_elevation_deg']:.1f}°, propagated from the committed TLE")
+        elif now < los:
+            secs = int((los - now).total_seconds())
+            mm, ss = divmod(secs, 60)
+            clock, clock_label = f"{mm:02d}:{ss:02d}", "In contact, time to LOS"
+            sub = f"LOS {los:%H:%M:%S} UTC over {station}"
+        else:
+            clock, clock_label = "--:--:--", "Time to next contact"
+            sub = "Recomputing the next window"
+    else:
+        # No live propagation available (orbital layer unavailable). Show the
+        # planned window rather than a clock that would be counting to nothing.
+        aos = _dt.datetime.fromisoformat(w["aos_utc"])
+        clock, clock_label = f"{aos:%H:%M:%S}", "Planned contact, AOS"
+        sub = f"{aos:%Y-%m-%d} UTC over {station}"
+
+    used, usable = b["bytes_used"], b["usable_bytes"]
+    pct = (used / usable * 100.0) if usable else 0.0
+
+    # The clock above is the live next pass; the budget here is the schedule
+    # the committed corpus was planned against. Those are two different
+    # windows and the qualifiers say so, because a reader who assumed the
+    # bytes belonged to the ticking clock would be reading a number that
+    # nothing on this page actually computed.
+    instruments = [
+        ("Usable downlink", f"{usable / 1e6:.2f} MB",
+         f"{b['downlink_kbps']:.0f} kbps, {w['duration_s'] / 60:.1f} min, planned window", False),
+        ("Scheduled", f"{used:,} B", f"{pct:.2f}% of the planned window", False),
+        ("Peak elevation",
+         f"{(live or w)['max_elevation_deg']:.1f}°",
+         f"{(live or w)['quality']}, {'next pass' if live else 'planned window'}", False),
+    ]
+    if acc.get("map50"):
+        instruments.append(
+            ("Detector mAP@0.5", f"{acc['map50']:.3f}",
+             f"{acc.get('tiles', 0):,} held-out tiles", False)
+        )
+    instruments.append(
+        ("LLM in control loop", "FALSE" if not plan.get("_llm_in_control_loop") else "TRUE",
+         "enforced by the interface", not plan.get("_llm_in_control_loop"))
+    )
+
+    cells = "".join(
+        f"<div class='instrument'><span class='k'>{k}</span>"
+        f"<span class='v{' ok' if ok else ''}'>{v}</span>"
+        f"<span class='q'>{q}</span></div>"
+        for k, v, q, ok in instruments
+    )
+
+    st.markdown(
+        f"""
+        <div class="hero">
+          <div class="hero-label">{clock_label}</div>
+          <div class="hero-countdown">{clock}</div>
+          <div class="hero-sub">{sub}</div>
+          <div class="budget-track">
+            <div class="budget-fill" style="width:{min(100.0, max(0.4, pct)):.3f}%"></div>
+          </div>
+          <div class="budget-scale">
+            <span>{used:,} B scheduled</span>
+            <span>{usable:,} B usable this pass</span>
+          </div>
+          <div class="instrument-row">{cells}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def render_header(platform_key: str | None) -> None:
     """Render the title, the thesis line and the authority strip."""
@@ -860,6 +1254,14 @@ def render_resilience_panel() -> None:
         ),
         width="stretch",
         hide_index=True,
+        column_config={
+            "Fault":    st.column_config.TextColumn(width="medium"),
+            "Response": st.column_config.TextColumn(width="large"),
+            # Test names are long and are the point of the table: this is the
+            # claim that every declared behaviour has something executing it.
+            # Clipped, it reads as decoration.
+            "Test":     st.column_config.TextColumn(width="large"),
+        },
     )
 
     if not RESILIENCE_ARTIFACT.exists():
@@ -1070,6 +1472,18 @@ def main():
         ovv_reason     = st.selectbox("Reason", ["high_uncertainty", "anomaly_cluster", "manual_verify"])
         send_ovv       = st.button("SEND OVV REQUEST")
 
+    # Shown only below the mobile breakpoint, where the CSS above hides the
+    # console. Rendered first so it is the top of the page when it appears.
+    st.markdown(
+        "<div class='mobile-gate'>"
+        "<div class='mg-title'>Desktop required</div>"
+        "<div class='mg-body'>The OSP command centre is an instrument panel: "
+        "a ground track, a byte-budget schedule and a decision audit trail "
+        "side by side. It needs a wider screen than this one. Open it on a "
+        "desktop browser.</div></div>",
+        unsafe_allow_html=True,
+    )
+
     render_header(platform_choice)
 
     # ── Load data ─────────────────────────────────────────────────────────────
@@ -1127,6 +1541,14 @@ def main():
                         f"~1-3 km/day, so these pass times are indicative only. "
                         f"Refresh with `python tools/refresh_tle.py`."
                     )
+                # The console goes above the narrative panel: a reader who
+                # stops after one screen should still leave knowing the
+                # window, the budget and the authority state.
+                render_hero(
+                    plan,
+                    load_detector_accuracy(),
+                    next_contact_from_now(sat_choice, station_choice),
+                )
                 render_mission_plan(plan)
         except Exception as e:
             st.error(f"Mission planning failed: {e}")
@@ -1154,12 +1576,25 @@ def main():
     status_color = "#f5f5f5" if total_anomalies > 0 else "#8b8b8b"
     status_text = "ANOMALY DETECTED" if total_anomalies > 0 else "NOMINAL"
 
+    # Detector accuracy belongs above the fold. It is the number a reader is
+    # actually trying to find, and it sat only in a chart caption several
+    # screens down.
+    acc = load_detector_accuracy()
+    acc_stat = ""
+    if acc.get("map50"):
+        acc_stat = (
+            f'<div class="mission-stat">Detector mAP@0.5 '
+            f'<span class="val">{acc["map50"]:.3f}</span>'
+            f'<span class="sub">{acc.get("tiles", "?"):,} held-out tiles</span></div>'
+        )
+
     st.markdown(
         f"""
         <div class="mission-strip">
             <div class="mission-stat">Queue state <span class="val" style="color:{status_color}">{status_text}</span></div>
             <div class="mission-stat">Briefs in queue <span class="val">{n_briefs}</span></div>
             <div class="mission-stat">Detections <span class="val">{total_anomalies}</span></div>
+            {acc_stat}
             <div class="mission-stat">Mean inference <span class="val">{avg_ms:.0f} ms</span></div>
             <div class="mission-stat">Mean cloud <span class="val">{avg_cloud:.0%}</span></div>
             <div class="mission-stat">Compression ratio <span class="val">{f'{comp_ratio:,}:1' if comp_ratio else 'n/a'}</span></div>
@@ -1171,17 +1606,38 @@ def main():
     # Stated up front, because a dashboard that mixes measured, simulated and
     # assumed values without saying which is which is not a demo — it is a
     # claim the reader cannot check.
-    if manifest:
-        camp = manifest.get("campaign", {})
-        mdl = manifest.get("model", {})
+    # Every claim here is read from the brief's own `provenance` block, never
+    # typed here. The brief is what the spacecraft produced and what a reader
+    # can open and check; a second copy of the same claim written by hand is
+    # just a thing that can disagree with it, and for a while it did.
+    prov = payloads[0].get("provenance", {}) if payloads else {}
+    mdl = manifest.get("model", {}) if manifest else {}
+
+    lines = []
+    for field, label in (("pixels", "Pixels"),
+                         ("detections", "Detections"),
+                         ("geolocation", "Geolocation")):
+        tag, detail = provenance_parts(prov.get(field, ""))
+        if not tag:
+            continue
+        line = f"**{label}:** {tag}"
+        if detail:
+            line += f", {detail}"
+        if field == "detections" and mdl:
+            line += (f" ({mdl.get('size_mb', '?')} MB, {mdl.get('precision', '')}, "
+                     f"over {manifest.get('source', {}).get('count', '?')} "
+                     f"held-out validation tiles)")
+        lines.append(line)
+
+    if lines:
+        st.caption("  \n".join(lines))
+    elif payloads:
+        # Uploaded or /output/ payloads carry no provenance block. Say that,
+        # rather than describing data this page cannot vouch for.
         st.caption(
-            f"**Detections:** measured, from `{Path(mdl.get('artifact', '')).name}`, "
-            f"{mdl.get('size_mb', '?')} MB {mdl.get('precision', '')}, run over "
-            f"{manifest.get('source', {}).get('count', '?')} held-out validation tiles. "
-            f"**Geolocation:** real, SGP4 propagation of {camp.get('satellite', '?')} "
-            f"(NORAD {camp.get('norad_id', '?')}), TLE epoch {camp.get('tle_epoch_utc', '?')}, "
-            f"{camp.get('region', '')}. "
-            f"**Pixels:** synthetic, {manifest.get('source', {}).get('tiles', '')}."
+            "**Provenance:** not declared on these payloads. The committed "
+            "corpus carries a per-brief provenance block; payloads loaded "
+            "from elsewhere do not, so nothing here is claiming what they are."
         )
 
     st.divider()
@@ -1220,57 +1676,23 @@ def main():
             )
             st.plotly_chart(fig, width="stretch")
 
+    # The queue used to run the full corpus down this narrow column while the
+    # map column held a fixed-height map, so roughly 40% of the page's scroll
+    # depth was empty black with cards stacking off to one side. It read as a
+    # broken page. Only as many cards as stand beside the map go here; the
+    # rest flow full width below, where they have room to sit three across.
     with data_col:
         st.markdown("### BRIEF QUEUE")
+        for payload in payloads[:QUEUE_BESIDE_MAP]:
+            render_brief_card(payload)
 
-        for payload in payloads:
-            scene_id  = payload.get("scene_id", "?")
-            ts        = payload.get("timestamp_utc", "")[:19].replace("T", " ")
-            anomalies = payload.get("anomalies", [])
-            
-            cards_html = ""
-            
-            if not anomalies:
-                cards_html = "<div style='color:#8b8b8b; font-family:monospace; font-size:12px;'>NO ANOMALIES DETECTED IN SECTOR.</div>"
-            else:
-                for a in anomalies:
-                    cls  = a.get("type", "unknown")
-                    conf = a.get("conf", 0)
-                    ll   = a.get("lat_lon", [0, 0])
-                    color = conf_color(conf)
-                    
-                    cards_html += render_timeline_card(
-                        cls,
-                        conf,
-                        ll[0],
-                        ll[1],
-                        color
-                    )
-            
-            full_html = f"""<div class="glass-panel">
-<h4 class="feed-title">{scene_id}</h4>
-<div class="feed-timestamp">ORBITAL TIMESTAMP: {ts} UTC</div>
-{cards_html}
-</div>"""
-            
-            st.markdown(full_html, unsafe_allow_html=True)
-
-            # The tile the detector actually saw, with the boxes it actually
-            # drew. Shown collapsed so the feed stays scannable, but present:
-            # a detection list with no way to look at the evidence asks the
-            # reader to take the model's word for it.
-            thumb = payload.get("_thumbnail")
-            if thumb and Path(thumb).exists():
-                with st.expander(f"View tile · {scene_id}"):
-                    st.image(
-                        thumb,
-                        width="stretch",
-                        caption=(
-                            "Visible bands (B2/B3/B4), contrast-stretched for "
-                            "display. Boxes are the INT8 model's detections at "
-                            "their true pixel coordinates."
-                        ),
-                    )
+    rest = payloads[QUEUE_BESIDE_MAP:]
+    if rest:
+        st.markdown(f"#### BRIEF QUEUE · {len(rest)} MORE")
+        grid = st.columns(3)
+        for i, payload in enumerate(rest):
+            with grid[i % 3]:
+                render_brief_card(payload)
 
     # ── Fault injection results ───────────────────────────────────────────────
     st.divider()
