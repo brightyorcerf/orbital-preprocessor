@@ -12,8 +12,8 @@
   "anomalies": [],
   "meta": {
     "model_version": "osp-yolov8n-int8-v1",
-    "inference_ms": 50.6,
-    "compression_ratio": 30720
+    "inference_ms": 48.5,
+    "compression_ratio": 1917
   },
   "provenance": {
     "pixels": "real \u2014 DOTA-v1.0 aerial imagery (aerial, roughly 0.1-1 m \u2014 NOT the 10 m Sentinel-2 GSD the orbital layer models. Briefs generated from these tiles must not inherit Sentinel-2 footprint fields.)",

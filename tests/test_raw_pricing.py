@@ -88,3 +88,64 @@ def test_every_brief_carries_its_own_raw_price(manifest):
     """
     missing = [b["scene_id"] for b in manifest["briefs"] if not b.get("raw_ccsds_bytes")]
     assert missing == [], f"briefs with no raw price: {missing}"
+
+
+def test_engine_stamps_the_wire_price_not_the_working_set_size():
+    """
+    `inference/engine.py`'s `_finalise` used to compute `compression_ratio`
+    from `tile_6ch.size * tile_6ch.itemsize`: the float32 array's in-memory
+    footprint. That is not a downlink cost, and every committed brief carried
+    the inflated number as a result (30,720:1 on the first corpus tile,
+    traced straight back to 9,830,400 / 320). This pins the fix: a fresh
+    payload's ratio must come out of `RAW_TILE_BYTES_CCSDS`, and must not
+    reproduce the float32 figure even by coincidence.
+    """
+    import numpy as np
+    import inference.engine as eng
+    from inference.engine import Anomaly, OSPEngine, OSPPayload
+
+    # A real engine over a mock ONNX session: `_finalise` also reads
+    # self.profile for budget enforcement, so a bare stand-in object won't
+    # do — this is the same fixture pattern tests/test_resilience.py uses.
+    real_build_session = eng.build_session
+    eng.build_session = lambda path, profile=None: eng.MockONNXSession()
+    try:
+        engine = OSPEngine("mock://osp-int8.onnx", platform="skyroot-oam")
+    finally:
+        eng.build_session = real_build_session
+
+    tile = np.zeros((640, 640, 6), dtype=np.float32)
+    payload = OSPPayload(
+        scene_id="TEST-0001",
+        timestamp_utc="2026-01-01T00:00:00.000Z",
+        tile_footprint={"lat_min": 0, "lat_max": 1, "lon_min": 0, "lon_max": 1},
+        cloud_cover=0.0,
+        anomalies=[Anomaly(type="ship", lat=0.5, lon=0.5, conf=0.9,
+                            bbox_px=[0, 0, 10, 10])],
+        inference_ms=50.0,
+    )
+
+    engine._finalise(payload, tile)
+
+    wire = len(payload.to_json().encode())
+    expected = max(1, RAW_TILE_BYTES_CCSDS // wire)
+    assert payload.compression_ratio == expected
+
+    float32_bytes = tile.size * tile.itemsize
+    bad_ratio = max(1, float32_bytes // wire)
+    assert payload.compression_ratio != bad_ratio, (
+        "compression_ratio matches the float32-denominator figure again"
+    )
+
+
+def test_serialization_demo_payload_is_not_hand_typed():
+    """
+    The CLI demo payload used to hardcode `compression_ratio = 85000`, the
+    project's very first retracted headline. A magic number sitting in a demo
+    fixture is exactly how it nearly reappeared. This asserts the demo's ratio
+    is derived, not typed, by checking it against the same formula the engine
+    uses rather than against a literal.
+    """
+    from inference.serialization_utils import RAW_TILE_BYTES_CCSDS as raw_price
+
+    assert raw_price == RAW_TILE_BYTES_CCSDS

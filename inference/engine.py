@@ -48,6 +48,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from data.tiles import list_tiles, read_tile
+from orbital.downlink import RAW_TILE_BYTES_CCSDS
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -679,6 +680,16 @@ class OSPEngine:
         # ratio field is populated after measurement, so we deliberately
         # re-measure below to report the true on-wire size rather than the
         # size of a placeholder payload.
+        #
+        # The raw side of that ratio used to be tile_6ch.size * tile_6ch.itemsize:
+        # the float32 array's in-memory footprint, not a downlink cost. Nothing
+        # transmits an uncompressed float buffer, so every payload this engine
+        # produced was stamped with an inflated ratio (9,830,400 B pretending to
+        # be the price of one tile). See RAW_TILE_BYTES_CCSDS's docstring in
+        # orbital/downlink.py for the full accounting and the measured price.
+        # CCSDS 123 itself is not run here — it costs ~9s/tile against a 169ms
+        # inference budget — so this uses the corpus-measured mean instead of
+        # re-encoding every tile.
         payload = OSPPayload(
             scene_id       = scene_id,
             timestamp_utc  = timestamp,
@@ -697,7 +708,7 @@ class OSPEngine:
         budgets. Runs for degraded briefs too: a fallback that quietly exceeds
         the per-payload cap has not actually helped anyone.
         """
-        raw_bytes = (tile_6ch.size * tile_6ch.itemsize) if tile_6ch is not None else 0
+        raw_bytes = RAW_TILE_BYTES_CCSDS if tile_6ch is not None else 0
         if raw_bytes:
             payload.compression_ratio = max(1, raw_bytes // len(payload.to_json().encode()))
             # Settle the ratio against the final serialisation (the ratio digits

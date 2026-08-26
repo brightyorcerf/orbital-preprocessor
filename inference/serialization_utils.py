@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from orbital.downlink import RAW_TILE_BYTES_CCSDS
+
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
@@ -396,7 +398,12 @@ if __name__ == "__main__":
         ],
         inference_ms      = 312.4,
         model_version     = "osp-yolov8n-int8-v1",
-        compression_ratio = 85000,
+    )
+    # Computed the same way `_finalise` does, against the measured CCSDS
+    # price rather than a hand-typed figure — a fixed demo number is exactly
+    # how the 85,000:1 constant went stale in the first place.
+    mock_payload.compression_ratio = max(
+        1, RAW_TILE_BYTES_CCSDS // len(mock_payload.to_json().encode())
     )
 
     # Serialize

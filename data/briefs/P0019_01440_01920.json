@@ -27,8 +27,8 @@
   ],
   "meta": {
     "model_version": "osp-yolov8n-int8-v1",
-    "inference_ms": 58.5,
-    "compression_ratio": 24212
+    "inference_ms": 47.9,
+    "compression_ratio": 1510
   },
   "provenance": {
     "pixels": "real \u2014 DOTA-v1.0 aerial imagery (aerial, roughly 0.1-1 m \u2014 NOT the 10 m Sentinel-2 GSD the orbital layer models. Briefs generated from these tiles must not inherit Sentinel-2 footprint fields.)",

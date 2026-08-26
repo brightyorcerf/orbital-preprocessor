@@ -1139,7 +1139,17 @@ def main():
     total_anomalies = sum(p.get("anomaly_count", 0) for p in payloads)
     avg_ms     = sum(p.get("meta", {}).get("inference_ms", 0) for p in payloads) / len(payloads)
     avg_cloud  = sum(p.get("cloud_cover", 0) for p in payloads) / len(payloads)
-    comp_ratio = payloads[0].get("meta", {}).get("compression_ratio", 85000)
+
+    # No hand-typed fallback here: 85000 was the retracted headline ratio,
+    # and a stale constant sitting in a `.get()` default is exactly how it
+    # nearly shipped a second time. A payload missing the field gets the
+    # ratio computed the same way `_finalise` computes it (against the
+    # measured CCSDS price), never a number that can go stale silently.
+    comp_ratio = payloads[0].get("meta", {}).get("compression_ratio")
+    if comp_ratio is None:
+        from orbital.downlink import RAW_TILE_BYTES_CCSDS
+        wire = len(json.dumps(payloads[0], separators=(",", ":")).encode())
+        comp_ratio = max(1, RAW_TILE_BYTES_CCSDS // wire) if wire else None
 
     status_color = "#f5f5f5" if total_anomalies > 0 else "#8b8b8b"
     status_text = "ANOMALY DETECTED" if total_anomalies > 0 else "NOMINAL"
@@ -1152,7 +1162,7 @@ def main():
             <div class="mission-stat">Detections <span class="val">{total_anomalies}</span></div>
             <div class="mission-stat">Mean inference <span class="val">{avg_ms:.0f} ms</span></div>
             <div class="mission-stat">Mean cloud <span class="val">{avg_cloud:.0%}</span></div>
-            <div class="mission-stat">Compression ratio <span class="val">{comp_ratio:,}:1</span></div>
+            <div class="mission-stat">Compression ratio <span class="val">{f'{comp_ratio:,}:1' if comp_ratio else 'n/a'}</span></div>
         </div>
         """, unsafe_allow_html=True
     )
