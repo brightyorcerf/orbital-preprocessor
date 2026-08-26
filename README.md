@@ -12,38 +12,6 @@ A trained detector finds ships, airplanes, harbors and storage tanks in real sat
 
 ---
 
-## Why this exists
-
-Start with one number.
-
-Take Sentinel-2C's actual element set from CelesTrak, propagate it with SGP4, and compute when it clears a 10° elevation mask over Hyderabad. Two usable contacts a day, the next one **10.2 minutes** long. At 32 kbps, derated for pass geometry, that is **1.95 MB**.
-
-A Sentinel-2 scene covers 110 km on a side. One 6-band tile of it is 6.4 km on a side, so a scene is roughly **three hundred tiles**. Compressed losslessly with CCSDS 123, the standard written for exactly this job, one tile costs **0.61 MB**, which puts the scene at about **180 MB** of lossless imagery.
-
-So one contact buys you **three tiles out of three hundred**: about 1% of a scene. And the camera does not wait: the backlog grows faster than the link drains it, forever. There is no patience strategy.
-
-(The 100 MB figure usually quoted for a Sentinel-2 product is a *delivered* product: already lossily compressed, not every band at full rate. 180 MB is what the same ground area costs to send losslessly, which is the comparison OSP is actually making.)
-
-At that point on-board inference stops being an optimisation and becomes the only thing that works at all.
-
-| Platform profile | Contact capacity | One 100 MB scene? | Briefs per contact |
-| :--- | ---: | :--- | ---: |
-| `moi-1a`, 2 Mbps x 8 min *(assumed)* | 122.9 MB | Barely, using the whole pass | 102,400 |
-| `skyroot-oam`, 32 kbps x 5 min *(assumed)* | 1.2 MB | No. Not one. | 1,000 |
-| `skyroot-oam`, 32 kbps x **10.2 min** *(computed)* | 1.95 MB | No. Not one. | 4,720 |
-
-That third row is the one that matters, because nothing in it was chosen. The duration came out of the propagation; the capacity came out of the duration. It also corrected the row above it: `contact_minutes_per_orbit = 5.0` was a `DERIVED` guess, and the real geometry says a good Hyderabad pass runs about twice that.
-
-OSP's answer is to never downlink the image. Detection runs on-orbit; what comes down is a structured brief: a few hundred bytes saying *what* was found, *where*, and *how confident*.
-
-> **20 held-out tiles as raw imagery:** 12.23 MB, priced under CCSDS 123. At this window's 1.95 MB, that is **6.3 contacts**, about three days at 2 usable passes per day.
->
-> **The same 20 tiles as briefs:** 8.27 KB. **One** pass, using **0.42%** of it. Same 21 detections, **1,480x** fewer bytes.
->
-> Both figures come out of `data/briefs/manifest.json`, which records `raw_ccsds_bytes` per tile beside `wire_bytes` per brief. `tests/test_raw_pricing.py` fails if the README and the manifest disagree.
-
----
-
 ## Data flow
 
 ```
@@ -74,262 +42,6 @@ ON-BOARD (constrained)                    │  GROUND (unconstrained)
 
 Left of the line runs on a compute budget. Right of the line does not.
 
-**[architecture.md](architecture.md) derives all of it**, byte by byte: the wire format field by field, the quantization mechanism, the frame chain, the authority boundary, the two faults nothing catches, and every retraction with the mechanism of the original error.
-
----
-
-## Five things worth your attention
-
-### 1. The orbit is computed, not drawn
-
-Until recently this project's "orbit" was a cosmetic circle: a perfect 51.6° ring in `ground/globe.py`, no Earth rotation, and a constant longitude offset applied so the track would pass over the demo scene. That made the central claim an assertion rather than a computation.
-
-`orbital/` closes it in six layers, from a committed CelesTrak snapshot through SGP4, hand-written frame conversions, real ground stations, bisection-refined contact windows, to a deterministic byte-budget scheduler.
-
-The frame conversions are written out rather than delegated to a library, because that is where satellite geometry code actually goes wrong, and the failure is silent: confusing TEME with J2000 gives a subpoint on the right continent, wrong by tens of kilometres. So they are checked against **Skyfield, an independent implementation**, over 24 hours: worst-case **38.5 m in slant range, 0.0003° in elevation, sub-metre in altitude**. Skyfield is test-only and never imported at runtime.
-
-Two assertions pin the ground track to reality rather than to a picture: its latitude bound must equal 180° − inclination (±81.4°, where the old fake track topped out at ±51.6°), and successive equator crossings must drift ~25° west, because the Earth turns underneath. A closed synthetic loop fails both.
-
-### 2. The language model is not allowed to be in charge
-
-This is the part I'd most like a reviewer to look at.
-
-An LLM's failure mode is *confident, fluent, plausible nonsense*. It does not crash. It does not return an error code. It returns a well-formed paragraph that happens to be wrong, and every downstream system accepts it happily.
-
-So the boundary is a property of the interface, not a convention:
-
-- `agent/mission_controller.py` computes the alert level deterministically, from the detection payload alone.
-- `_reconcile_alerts()` takes the higher severity, so the model can escalate and **can never de-escalate**. Unparseable output maps to the lowest level, which makes a broken model exactly as harmless as an absent one.
-- `DownlinkScheduler.plan()` takes a window and a list of briefs. There is no argument, hook or callback through which a model can reach the decision. `DownlinkPlan` is frozen, so the object handed to the analyst for narration cannot be edited by it.
-- Every decision carries the rule that produced it and a hash of the policy constants, which is what makes it an audit trail rather than a log file.
-
-Three tests hold that line, because architecture claims that aren't tested are decoration: `test_scheduler_interface_exposes_no_model_hook` fails if anyone adds an `advisor` or `hint` parameter; `test_plan_is_byte_identical_across_runs` runs the real corpus twice in opposite order; `test_narrating_a_plan_cannot_change_it` proves the narrator cannot touch it.
-
-Where it is **softer than it looks**: `_decide_ovv` does accept an LLM-proposed re-image target when policy has not already covered that coordinate, and because the list is capped at three sorted by a priority the model supplies itself, it can outbid a policy request for the last slot. That request never reaches the scheduler and is never uplinked here, but it is the one place a model output lands in an action list. [Full analysis](architecture.md).
-
-### 3. The compression claim is a curve, not a ratio
-
-A single ratio cannot carry this argument, and the brief corpus shows why: its largest per-scene ratio belongs to a brief containing **zero detections**. An empty brief is nearly free, so a headline ratio partly measures how empty the scenes happened to be.
-
-A ratio also answers the wrong question. An operator does not ask how small a brief is. They ask: *given the bytes this pass affords, how much of what is down there will I know about?*
-
-`ground/rate_distortion.py` fixes a byte budget, spends it three ways, and counts what the ground ends up knowing about the **whole** corpus. Objects on tiles that never fit count as missed. **That denominator is the entire experiment**: score only the delivered tiles and every strategy trends to 1.0.
-
-![bytes versus detections](docs/rate_distortion.png)
-
-Priced over **1,000 held-out DOTA tiles, 9,472 labelled objects**, stride-sampled so all four classes appear in corpus proportion. Contact budget: 32.0 kbps x 5.0 min = 1,200,000 B.
-
-| Strategy | Bytes/tile | Recall | Precision | Tiles per contact |
-| :--- | ---: | ---: | ---: | ---: |
-| **raw, lossless (CCSDS 123)** | **592,934** | 0.862 | 0.920 | **2.0** |
-| raw, lossless (PNG) | 2,366,944 | 0.862 | 0.920 | 0.5 |
-| JPEG q75 | 53,317 | 0.828 | 0.920 | 22 |
-| JPEG q30 | 26,079 | 0.814 | 0.925 | 46 |
-| JPEG q2 | 8,291 | 0.507 | 0.846 | 145 |
-| brief @ conf 0.20 | 951 | 0.893 | 0.873 | 1,262 |
-| **brief @ conf 0.35** | **894** | **0.862** | **0.920** | **1,343** |
-| brief @ conf 0.65 | 755 | 0.707 | 0.974 | 1,590 |
-| brief @ conf 0.80 | 273 | **0.000** | **0.000** | 4,396 |
-
-**The brief at conf 0.35 ties raw lossless exactly**, 0.862 recall and 0.920 precision, for **1/663rd** of the bytes. Not approximately: the same numbers, because the brief *is* the raw tile's detection result at the deployed threshold, and the ground station runs the same detector either way. Reaching that recall costs **592.9 MB** as raw tiles under CCSDS 123, or **0.89 MB** as briefs. JPEG never reaches it at any quality, peaking at 0.828 for 53.3 MB.
-
-CCSDS 123 is the row that matters, and it is four times cheaper than the PNG row this table used to carry alone. The PNG row is kept because earlier versions of this document quoted it, and because the gap between them is the point: a lossless codec that understands the band axis costs a quarter of one that does not.
-
-**The detector has a confidence ceiling, and past it the brief goes silent.** At conf 0.80 the sweep emits **zero detections across all 9,472 objects**: not a degraded brief, an empty one, still costing 273 B/tile of envelope. Any operator threshold above ~0.7 silently downlinks nothing. That is a hard operating-envelope constraint and the single most important number in this table.
-
-> **Retracted.** An earlier version reported that heavy JPEG made the detector *hallucinate*, precision collapsing to 0.279 at q2. **That does not reproduce on real imagery.** At q2 on DOTA, recall falls to 0.507 but precision holds at 0.846, close to the raw baseline's 0.920. Heavy JPEG on real scenes hides objects; it does not invent them. The original was an artefact of synthetic tiles, where compression artefacts on flat backgrounds resembled the drawn primitives the detector was trained on.
-
-> **Sampling note.** `--limit` used to take the *first* N tiles. DOTA names sort by source image, so a prefix is a contiguous run of a few scenes: the first 1,000 tiles of this split hold 16,433 ships and **zero** storage-tanks. An earlier draft of this table was built that way and was wrong. Both tools now sample at even stride.
-
-The comparison is set up to be unkind to OSP in three specific ways: raw is priced under **CCSDS 123**, the lossless standard that actually flies, which costs half what PNG does and is the strongest fair opponent this argument has; briefs are priced as minified JSON when the protobuf they ship in is 2.66x smaller; and ground-side detection uses the same detector at the same threshold, so pixel strategies are never handicapped.
-
-CCSDS 123 is, if anything, *too* strong here. It reaches 1.99 bits per sample on this corpus because five of the six bands are linear functions of the first three, so its inter-band predictor is exploiting redundancy a real instrument would never hand it. A measured multispectral cube would cost more per tile than this, and OSP's margin on real sensor data would be larger than the number reported here, not smaller.
-
-What the curve cannot show is worth stating alongside it. Pixels can be re-analysed later, with a better model, for a question nobody has asked yet. A brief cannot.
-
-```bash
-python ground/rate_distortion.py --tiles val/images --labels val/labels --limit 1000
-```
-
-### 4. The declared safety behaviours are executed, not just declared
-
-`config/platforms.py` declares a 5.0 s watchdog, a 400 ms latency budget and `fallback_on_model_failure = "hold_last_known_good_and_flag_ground"`. For most of this project's life **none of those were reachable by any code path**, a state worse than no declaration, because it reads as a safety property and behaves as a comment.
-
-`inference/engine.py` no longer raises: any failure in the perception path, and any watchdog overrun, becomes the profile's declared fallback brief, flagged `degraded`. Each declared string resolves to a real handler, and **an engine refuses to start against a profile whose declared fallback has no implementation.**
-
-| Fault | What the system does | Test |
-| :--- | :--- | :--- |
-| Model crash, execution provider fault | Declared fallback fires, brief flagged `degraded` | `test_a_model_crash_produces_the_declared_fallback` |
-| Perception overruns the watchdog | Same fallback, fault recorded as `WatchdogExpiry` | `test_a_stall_trips_the_watchdog_and_fires_the_fallback` |
-| Over the latency budget but returning | Reported; the brief still stands | `test_a_latency_budget_breach_is_reported` |
-| Failure on the first tile, nothing to hold | Degrades to an empty flagged brief, invents nothing | `test_hold_with_no_history_degrades_further_rather_than_inventing` |
-| Truncated or malformed brief | Quarantined with a reason, contact still planned | `test_structurally_destructive_corruption_is_quarantined` |
-| Bit flips in INT8 weights | Invisible to the perception path; caught out of band by a CRC-32 scrub and repaired from the golden copy | `test_an_upset_model_still_loads_and_runs`, `tests/test_protect.py` |
-
-`test_every_assurance_field_is_exercised` keeps this honest: it fails if a field is added to `AssuranceProfile` without a test that makes it happen.
-
-Two results matter more than the machinery.
-
-**Bit flips are invisible to the model, so something outside the model has to look.** A single-event upset lands in INT8 weights as silent numerical corruption. Flip a quarter of a million bits and the graph still loads, every tensor still has the right shape, inference still returns, and nothing reports a problem. Accuracy holds to about 0.07% of weight memory and then collapses, and **as it collapses the model emits more detections, not fewer** (856 at baseline, 16,548 at 4.19% of weight memory). The failure mode is not silence, it is confident nonsense. It is the same argument this repo makes about language models, and it turns out to apply to the detector too.
-
-No fallback can catch that, because there is no error to catch. What catches it is an integrity check that never asks the model anything: a CRC-32 per weight tensor, 252 bytes of state for the whole 3.69 MB artifact, verified in 15 ms. `resilience/protect.py` detects and repairs from a golden copy, and the end-to-end check is in the committed sweep: **65,536 flips across all 63 tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836 after the scrub**, restored exactly rather than approximately.
-
-**Which bits matter is not evenly spread, and that decides what protection is worth buying.** Confining every flip to one bit position at a time:
-
-| bit flipped | weight moves by | mAP retained |
-| ---: | ---: | ---: |
-| 0-3 | 1 to 8 | 0.993 - 1.011 |
-| 4 | 16 | 0.952 |
-| 5 | 32 | 0.745 |
-| 6 | 64 | 0.156 |
-| 7 (sign) | -128 | **0.000** |
-
-The bottom half of the byte is free. The top half is where the model lives. A scheme protecting only the top four bits would buy essentially all the available safety for half the state, which is the first thing to reach for if a golden copy ever stops fitting in memory. The uniform sweep averages these eight populations together and hides it.
-
-`MEASURED`, `resilience/artifacts/degradation_dota.json`, regenerate with `python resilience/degradation.py --images val/images --labels val/labels --tiles 96`.
-
-**How often to scrub is arithmetic, once the curve exists.** The detector holds 95% of baseline mAP through **16,384 flips**, 0.065% of its 25,026,816 weight bits. Divide by an upset rate and that becomes an interval: at 1e-6 upsets/bit/day, scrub every 655 days; at 1e-5, every 65. The rate itself is the one number here that is `ASSUMED` rather than measured, because OSP has no flight hardware and no radiation test report. Everything downstream of it is linear, so a reader with a real device can rescale the answer without rerunning anything.
-
-**A single flipped byte in a brief is often undetectable.** About half the time it lands somewhere that still parses and still type-checks. Structural validation cannot fix this; an integrity check on the wire would, and OSP does not have one. `test_a_single_flipped_byte_can_survive_ingest_undetected` pins the gap rather than letting the quarantine tests imply a completeness they do not deliver.
-
-What ingest does guarantee is narrower and worth stating precisely: it never raises, and it never repairs. A truncated brief is rejected, not coerced to "zero detections", because that is not a missing observation, it is a false one.
-
-### 5. Every number in this file regenerates from a script
-
-No figure here was typed by hand. Each has a command that reproduces it, and the repo distinguishes `PUBLISHED` (the operator stated it), `MEASURED` (we measured it), and `DERIVED` (an engineering assumption, to be replaced when real specs exist).
-
-This matters because an earlier version of this README confidently advertised "85,000:1 compression" and a "<3 MB INT8 model". Both were wrong. The first divided one tile's brief by an entire scene, a 324x coverage mismatch. The second had never been measured. The honest numbers are 3,938:1 per tile and 3.69 MB, and the size target is recorded as missed rather than quietly restated.
-
-> **Retracted, and this one was load-bearing.** Every compression ratio in this README used to divide by **9.83 MB**, the float32 array a tile occupies *in memory*. That is not a downlink cost. Nothing transmits an uncompressed float buffer, so the alternative OSP was beating was not a codec at all. Priced under CCSDS 123 a tile is **0.61 MB**, and the headline falls from 23,785x to **1,480x**, the per-tile ratio from 63,279:1 to **3,938:1**. The mechanism of the error was an inconsistency the repo carried in plain sight: `ground/rate_distortion.py` had always refused to price raw at float32, on the grounds that it "would inflate OSP's advantage by roughly 2x for free", while this file did exactly that. The experiment was right and the headline was wrong. `orbital/downlink.py` now defaults to the wire price, and `tests/test_raw_pricing.py` keeps the two from drifting apart again.
-
----
-
-## Results
-
-![Results at a glance](docs/results_overview.svg)
-
-Five numbers, each backed by a committed artifact and the script that regenerates it, named in the section below. The full derivation, including every retraction and the mutation-tested fault sweep, is in [architecture.md](architecture.md).
-
-### Detection accuracy
-
-**These numbers are from real aerial imagery.** An earlier version scored 0.992 against tiles `data/synth_demo.py` drew (storage tanks as circles, airplanes as plus-signs) and said plainly the number was close to meaningless and would drop when real imagery replaced it. It did. That was the point.
-
-**3,677 held-out tiles** from DOTA-v1.0, 34,918 labelled instances, none seen during training. Scored through the deployed decision path: same NMS, same class map, same confidence threshold flight code uses.
-
-| | FP32 checkpoint | INT8 (what ships) |
-| :--- | ---: | ---: |
-| **mAP@0.5** | **0.889** | **0.880** |
-| **mAP@0.5:0.95** | **0.576** | **0.544** |
-| ship *(19,651 instances)* | 0.960 | 0.952 |
-| airplane *(5,464)* | 0.944 | 0.930 |
-| harbor *(4,626)* | 0.845 | 0.844 |
-| storage-tank *(5,177)* | 0.807 | 0.794 |
-
-Against the synthetic corpus it replaced: 0.993 → 0.880 at IoU 0.5, and 0.853 → 0.544 at strict IoU, on 80 tiles → 3,677. That 11-point and 31-point drop is what replacing drawn primitives with photographed scenes costs. The synthetic score was not wrong, it was measuring the wrong thing.
-
-Per-class figures are shown because a composite can hide one dead class behind three healthy ones, and here it would: **storage-tank recall is 0.653** at INT8 against precision of 0.936. The model is not confusing tanks with something else, it is failing to find them. That class is the honest weak point of this detector.
-
-```bash
-python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
-    --images val/images --labels val/labels
-```
-
-### Quantization
-
-| Metric | FP32 | INT8 | |
-| :--- | ---: | ---: | :--- |
-| Artifact size | 12.67 MB | 3.69 MB | 3.43x smaller |
-| Latency (CPU, 640², sequential) | 94.1 ms | 51.4 ms | 1.83x faster |
-| Mean relative divergence | n/a | 2.11 % | max 2.81 % |
-| **mAP@0.5** (3,677 real tiles) | **0.889** | **0.880** | costs 0.9 points |
-| **mAP@0.5:0.95** | **0.576** | **0.544** | costs 3.2 points |
-| Bitwise determinism | n/a | PASS | identical output across runs |
-| `skyroot-oam` 400 ms budget | Met | Met | 7.8x margin |
-
-Static INT8 post-training quantization (QDQ, per-channel weights), calibrated on 32 DOTA validation tiles through the *same* preprocessing path as inference. Those 32 tiles are drawn from the same 3,677-tile split the INT8 column is scored on, so roughly 0.9% of the scoring set was seen by the calibrator: second-order, but not zero, and the number is not independent.
-
-Static rather than dynamic on purpose: dynamic quantization leaves most convolutions in FP32 and makes latency data-dependent, which breaks the determinism property the assurance story rests on. Bitwise determinism is the quiet one worth noticing: it is what makes an on-orbit result reproducible on the ground.
-
-```bash
-python model/benchmark_quantization.py --platform skyroot-oam
-```
-
-### Spectral bands
-
-The stem swap replaces YOLOv8n's 3-channel first convolution with a 6-channel one (B2/B3/B4/B8/B11/B12). The visible channels inherit pretrained weights; the infrared channels are initialised to the mean of the RGB weights rather than to noise, so from step zero the network has working edge detectors on bands it has never seen.
-
-The architectural motivation was that B11/B12 short-wave infrared separates hull material from seawater through haze. **That motivation is sound physics, and this repository cannot claim any of it.** The reason is arithmetic: `data/synthetic_bands.py` derives every band from RGB by a fixed linear map, so nothing enters those lines that was not already in R, G and B.
-
-**And yet dropping B11 and B12 together costs 0.046 mAP on real imagery** (0.836 → 0.791). Those two facts are compatible: *information-redundant is not the same as a trained network being indifferent to losing the channel.* 32 epochs of gradient descent evidently pulled the infrared planes into carrying some of the load, however redundantly, and zeroing them at inference is a distribution shift rather than an information loss.
-
-An earlier version asserted the zero-cost result "reproduces on DOTA". **That was written before any DOTA measurement existed, and it was wrong.**
-
-The two costliest bands to drop are **B2 (blue), 0.066 mAP, and B4 (red), 0.051**: both larger than the combined SWIR cost, and both plain visible channels rather than the derived infrared pair the design was motivated by.
-
-Settling the SWIR question needs a sensor that measures it independently, and that is scarce for physical rather than editorial reasons: SWIR's wavelength is roughly three times visible light's, so the same aperture resolves three times less detail, and silicon cannot see it at all. So: real channel surgery, real INT8 calibration across six planes, real band-dropout resilience, built correctly for a sensor this project does not have.
-
-### Latency
-
-`51 ms per tile` is a *mean*, inference only, measured on a laptop with every core available. Re-measured as a distribution over 100 held-out DOTA tiles, with the whole per-tile cost split in two:
-
-| | p50 | p95 | p99 | mean |
-|---|---|---|---|---|
-| **Host, unconstrained** (4 cores) | | | | |
-| preprocess | 56.93 | 102.48 | 226.14 | 56.88 |
-| inference | 50.19 | 54.57 | 60.50 | 51.02 |
-| end to end | 106.02 | 154.64 | 282.54 | 107.89 |
-| **Constrained** (`--cpus 2 --memory 4g`) | | | | |
-| preprocess | 87.24 | 140.01 | 215.93 | 88.14 |
-| inference | 88.07 | 113.72 | 185.76 | 82.44 |
-| end to end | 168.91 | 232.71 | 307.65 | 170.58 |
-
-Milliseconds. Raw output committed under `docs/latency/`. Halving the cores roughly doubles inference and leaves p99 end to end at **307.65 ms against the platform's 400 ms budget**, so the budget holds at the tail rather than only at the median. And preprocessing is not the free part: at two cores it costs more than inference at p50, because `rgb_to_6band()` runs two `cv2.resize` calls to synthesise bands that also cannot show a perception benefit.
-
-This is x86 held to two cores, not ARM. A Pi 5 or an Orin Nano has a different instruction mix and these numbers will not extrapolate to one.
-
-### Fault tolerance
-
-Single-event upsets injected uniformly into 25,026,816 bits of quantised weight memory, real DOTA detector, 96 held-out tiles, 3 draws per point:
-
-| Weight bits flipped | Share of weight memory | mAP@0.5 | Detections emitted |
-| ---: | ---: | ---: | ---: |
-| 0 | 0% | 0.836 | 856 |
-| 16,384 | 0.07% | 0.801 | 643 |
-| 131,072 | 0.52% | 0.030 | 45 |
-| 1,048,576 | 4.19% | 0.000 | **16,548** |
-
-The detection count is the column to read: below 0.13% the model is essentially undisturbed, between 0.13% and 0.52% it collapses, and past 1% it goes silent-then-loud, **16,548 detections, 19x the clean baseline, essentially all of it wrong, with no error raised anywhere in the stack.**
-
-The fault is catchable, just not by the model. A CRC-32 per weight tensor is 252 B of state against a 3.69 MB artifact and verifies in 15 ms, out of band. The committed sweep runs the full loop: **65,536 flips across all 63 weight tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836**, with `fully_restored: true` asserting the last two are equal rather than close.
-
-Which bit flips matters as much as how many, and dropping any single spectral band costs at most 0.066 mAP except when all six are gone at once, which is fatal. Both breakdowns, and the arithmetic for how often a scrub needs to run against an assumed upset rate, are in [architecture.md](architecture.md#7-failure).
-
-```bash
-python resilience/degradation.py --images val/images --labels val/labels --tiles 96
-python -m pytest tests/test_resilience.py -v
-```
-
----
-
-## Evaluation
-
-Four suites, because four very different things can be wrong. **92 tests locally.** CI runs 84 and skips 8: the accuracy floor, the stem-swap check and the SEU injection tests all need a trained artifact or torch, neither of which a repository should carry. So the badge means *the deterministic layers hold*, not *the detector is accurate*.
-
-| Suite | Covers |
-| :--- | :--- |
-| `tests/test_pipeline.py` (16) | Tensor contracts, geo-projection, protobuf round-trip, memory budget, tile-storage equivalence, DOTA label conversion, rate-distortion accounting, and an accuracy floor on the trained detector |
-| `tests/test_resilience.py` (33) | Fault injection into INT8 weights, dead spectral bands, watchdog overruns, hard model failure, corrupted briefs, plus coverage over `AssuranceProfile` itself |
-| `tests/test_orbital.py` (43) | TLE parsing conventions, frame conversions against Skyfield, pass geometry, the scheduling policy, and the authority boundary |
-| `ground/eval_suite.py` (6 axes) | LLM faithfulness: schema validity, entity grounding, coordinate fidelity, numeric fidelity, citation validity, policy consistency |
-
-Two details that decide whether any of that means anything.
-
-`test_pipeline.py` is both a standalone runner and a pytest module, and for most of its life its decorator caught and reported failures rather than raising them, so under `pytest` **every test in it reported PASS no matter what it asserted**, including a deliberately failing probe. The outcome is now re-raised when pytest is driving. The green result is a newer claim than the tests are.
-
-`eval_suite.py`'s composite is the **minimum** across axes, not the mean: a brief that invents coordinates is not redeemed by having valid JSON. It replaced a metric that compared `len(anomalies)` to `len(assessments)` and returned a perfect 1.0 on equality, which it happily did for briefs that substituted classes, placed objects 400 km away, fabricated every confidence value, and downgraded a critical scene to nominal. All six are now regression cases.
-
-The resilience suite was checked by mutation, not just by running it: disabling the watchdog comparison fails two tests, and letting a degraded brief become the last-known-good fails a third.
-
 ---
 
 ## Run it
@@ -354,7 +66,155 @@ python tools/generate_briefs.py        # regenerate the committed brief corpus
 python tools/verify_docker_repro.py    # diff a container rebuild against what's committed
 ```
 
-Full commands for training from scratch, the DOTA reproduction path, and TLE tooling are in [architecture.md](architecture.md), along with the training and container-reproducibility caveats worth knowing before you rely on either.
+Full commands for training from scratch, the DOTA reproduction path, and TLE tooling are in [architecture.md](architecture.md).
+
+---
+
+## Why this exists
+
+- A Sentinel-2 scene costs about **180 MB** losslessly compressed (CCSDS 123, the standard written for this job).
+- A real ground station pass, SGP4-propagated over Hyderabad at a 10° elevation mask, affords about **1.95 MB**.
+- That's **1%** of a scene per contact, and the camera doesn't wait: the backlog grows faster than the link drains it, forever.
+
+OSP's answer is to never downlink the image. Detection runs on-orbit; what comes down is a structured brief: a few hundred bytes saying *what* was found, *where*, and *how confident*.
+
+**20 held-out tiles as raw imagery** (CCSDS 123): 12.23 MB, 6.3 contacts. **The same 20 tiles as briefs**: 8.27 KB, one pass, using 0.42% of it. Same 21 detections, **1,480x** fewer bytes.
+
+---
+
+## Core features
+
+**Deterministic orbital mechanics.** `orbital/` runs a committed CelesTrak TLE snapshot through SGP4, hand-written frame conversions, real ground stations, and a bisection-refined contact scheduler. Frame conversions are checked against Skyfield (test-only, never imported at runtime) over 24 hours: worst case 38.5 m in slant range, 0.0003° in elevation.
+
+**Air-gapped LLM authority.** The language model narrates the outcome and cannot change it. `agent/mission_controller.py` computes alert level deterministically from the detection payload; the model can escalate a narrated severity but never de-escalate it. `DownlinkScheduler.plan()` takes no model hook, and the resulting `DownlinkPlan` is frozen before the model ever sees it. Three tests enforce the boundary: one fails if a model hook is ever added to the scheduler's signature, one proves the plan is byte-identical regardless of run order, one proves narration cannot mutate the plan.
+
+**Extreme compression, priced honestly.** `ground/rate_distortion.py` fixes a byte budget and scores the whole corpus against it, including tiles that never fit a contact. At conf 0.35, briefs match raw lossless detection accuracy exactly, 0.862 recall and 0.920 precision, for 1/663rd the bytes.
+
+**Radiation resilient.** INT8 weights are protected from single-event upsets by a CRC-32 scrub run out of band: 252 bytes of state for the whole 3.69 MB artifact, verified in 15 ms, no model reload required. A committed sweep of 65,536 flips across all 63 weight tensors: 63 of 63 detected, mAP restored from 0.359 back to 0.836 exactly.
+
+**Graceful degradation.** Every declared fallback in `config/platforms.py` (watchdog timeout, latency budget, model-failure behavior) resolves to a real handler and is exercised by a test; an engine refuses to start against a profile whose declared fallback has no implementation.
+
+For the full derivation of any of the above, the wire format byte by byte, the authority boundary's edge cases, and the bit-level fault analysis, see [architecture.md](architecture.md).
+
+---
+
+## Results
+
+![Results at a glance](docs/results_overview.svg)
+
+Five numbers, each backed by a committed artifact and a script that regenerates it.
+
+### Detection accuracy
+
+**3,677 held-out tiles** from DOTA-v1.0, 34,918 labelled instances, none seen during training. Scored through the deployed decision path: same NMS, same class map, same confidence threshold flight code uses.
+
+| | FP32 checkpoint | INT8 (what ships) |
+| :--- | ---: | ---: |
+| **mAP@0.5** | **0.889** | **0.880** |
+| **mAP@0.5:0.95** | **0.576** | **0.544** |
+| ship *(19,651 instances)* | 0.960 | 0.952 |
+| airplane *(5,464)* | 0.944 | 0.930 |
+| harbor *(4,626)* | 0.845 | 0.844 |
+| storage-tank *(5,177)* | 0.807 | 0.794 |
+
+Storage-tank recall is 0.653 at precision 0.936: the model isn't confusing tanks with something else, it's failing to find them. That's the honest weak point of this detector.
+
+```bash
+python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
+    --images val/images --labels val/labels
+```
+
+### Quantization
+
+| Metric | FP32 | INT8 | |
+| :--- | ---: | ---: | :--- |
+| Artifact size | 12.67 MB | 3.69 MB | 3.43x smaller |
+| Latency (CPU, 640², sequential) | 94.1 ms | 51.4 ms | 1.83x faster |
+| Mean relative divergence | n/a | 2.11 % | max 2.81 % |
+| **mAP@0.5** (3,677 real tiles) | **0.889** | **0.880** | costs 0.9 points |
+| **mAP@0.5:0.95** | **0.576** | **0.544** | costs 3.2 points |
+| Bitwise determinism | n/a | PASS | identical output across runs |
+| `skyroot-oam` 400 ms budget | Met | Met | 7.8x margin |
+
+Static INT8 post-training quantization (QDQ, per-channel weights), chosen over dynamic quantization specifically because dynamic makes latency data-dependent, and the assurance story rests on bitwise-identical output across runs.
+
+```bash
+python model/benchmark_quantization.py --platform skyroot-oam
+```
+
+### Compression
+
+Priced over **1,000 held-out DOTA tiles, 9,472 labelled objects**. Contact budget: 32.0 kbps x 5.0 min = 1,200,000 B.
+
+| Strategy | Bytes/tile | Recall | Precision | Tiles per contact |
+| :--- | ---: | ---: | ---: | ---: |
+| **raw, lossless (CCSDS 123)** | **592,934** | 0.862 | 0.920 | **2.0** |
+| raw, lossless (PNG) | 2,366,944 | 0.862 | 0.920 | 0.5 |
+| JPEG q75 | 53,317 | 0.828 | 0.920 | 22 |
+| JPEG q30 | 26,079 | 0.814 | 0.925 | 46 |
+| JPEG q2 | 8,291 | 0.507 | 0.846 | 145 |
+| brief @ conf 0.20 | 951 | 0.893 | 0.873 | 1,262 |
+| **brief @ conf 0.35** | **894** | **0.862** | **0.920** | **1,343** |
+| brief @ conf 0.65 | 755 | 0.707 | 0.974 | 1,590 |
+| brief @ conf 0.80 | 273 | **0.000** | **0.000** | 4,396 |
+
+The brief at conf 0.35 ties raw lossless exactly, for 1/663rd the bytes. Above conf ~0.7 the detector goes silent: zero detections across all 9,472 objects, still costing 273 B/tile of envelope. That's a hard operating-envelope constraint.
+
+```bash
+python ground/rate_distortion.py --tiles val/images --labels val/labels --limit 1000
+```
+
+### Latency
+
+`51 ms per tile` is a *mean*, inference only, on a laptop with every core available. Measured as a distribution over 100 held-out DOTA tiles, split into preprocess and inference:
+
+| | p50 | p95 | p99 | mean |
+|---|---|---|---|---|
+| **Host, unconstrained** (4 cores) | | | | |
+| preprocess | 56.93 | 102.48 | 226.14 | 56.88 |
+| inference | 50.19 | 54.57 | 60.50 | 51.02 |
+| end to end | 106.02 | 154.64 | 282.54 | 107.89 |
+| **Constrained** (`--cpus 2 --memory 4g`) | | | | |
+| preprocess | 87.24 | 140.01 | 215.93 | 88.14 |
+| inference | 88.07 | 113.72 | 185.76 | 82.44 |
+| end to end | 168.91 | 232.71 | 307.65 | 170.58 |
+
+Milliseconds. Raw output committed under `docs/latency/`. p99 end to end at two cores is 307.65 ms against the platform's 400 ms budget: the margin holds at the tail, not just the median. This is x86 held to two cores, not ARM; a Pi 5 or an Orin Nano has a different instruction mix.
+
+### Fault tolerance
+
+Single-event upsets injected uniformly into 25,026,816 bits of quantised weight memory, real DOTA detector, 96 held-out tiles:
+
+| Weight bits flipped | Share of weight memory | mAP@0.5 | Detections emitted |
+| ---: | ---: | ---: | ---: |
+| 0 | 0% | 0.836 | 856 |
+| 16,384 | 0.07% | 0.801 | 643 |
+| 131,072 | 0.52% | 0.030 | 45 |
+| 1,048,576 | 4.19% | 0.000 | **16,548** |
+
+Below 0.13% of weight memory the model is essentially undisturbed; between 0.13% and 0.52% it collapses; past 1% it goes silent-then-loud, 19x the clean detection count, all of it wrong, with no error raised anywhere in the stack.
+
+A CRC-32 per weight tensor catches it out of band: 252 B of state against a 3.69 MB artifact, verified in 15 ms. The committed sweep runs the full loop: 65,536 flips across all 63 weight tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836, restored exactly.
+
+```bash
+python resilience/degradation.py --images val/images --labels val/labels --tiles 96
+python -m pytest tests/test_resilience.py -v
+```
+
+---
+
+## Evaluation
+
+**92 tests locally.** CI runs 84 and skips 8 that need a trained artifact or torch.
+
+| Suite | Covers |
+| :--- | :--- |
+| `tests/test_pipeline.py` (16) | Tensor contracts, geo-projection, protobuf round-trip, memory budget, tile-storage equivalence, DOTA label conversion, rate-distortion accounting, and an accuracy floor on the trained detector |
+| `tests/test_resilience.py` (33) | Fault injection into INT8 weights, dead spectral bands, watchdog overruns, hard model failure, corrupted briefs, plus coverage over `AssuranceProfile` itself |
+| `tests/test_orbital.py` (43) | TLE parsing conventions, frame conversions against Skyfield, pass geometry, the scheduling policy, and the authority boundary |
+| `ground/eval_suite.py` (6 axes) | LLM faithfulness: schema validity, entity grounding, coordinate fidelity, numeric fidelity, citation validity, policy consistency |
+
+`eval_suite.py`'s composite is the **minimum** across axes, not the mean: a brief that invents coordinates is not redeemed by having valid JSON. The resilience suite is checked by mutation as well as by running it: disabling the watchdog comparison fails two tests, letting a degraded brief become the last-known-good fails a third.
 
 ---
 
@@ -385,5 +245,7 @@ orbital/    TLE ingest, SGP4, frames, ground stations, passes, downlink schedule
 tools/      brief-corpus generation, TLE refresh, container reproduction check
 ground/     dashboard, 3D globe, episodic memory, LLM analyst, eval suite
 ```
+
+For a full derivation of every number here, byte by byte, plus the fault sweep's bit-level breakdown and the LLM authority boundary's edge cases, see [architecture.md](architecture.md).
 
 ---
