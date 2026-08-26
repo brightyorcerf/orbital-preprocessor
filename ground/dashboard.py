@@ -152,15 +152,16 @@ st.markdown(f"""
         transition: all 0.3s ease;
         box-shadow: inset 0 0 10px rgba(255,255,255,0.02);
     }}
-    /* Queue cards sit in independent per-column stacks, so a card that carries
-       two detections pushes everything below it out of line with its
-       neighbours. A floor sized for the tallest common card (two detections)
-       makes the grid read as a grid.
-       ponytail: fixed floor, not measured from the corpus. A brief with three
-       or more detections still grows past it; size it from the corpus max if a
-       denser sensor ever makes that the common case. */
-    .brief-card {{
-        min-height: 232px;
+    /* Queue cards sit in independent per-column stacks, so a card carrying two
+       detections pushes its neighbours' "View tile" buttons out of line and the
+       grid stops reading as a grid.
+       Pinning the whole card would mean guessing at title and timestamp
+       heights, which wrap differently at different column counts. Those are
+       identical on every card anyway: the only thing that varies is how many
+       detections the brief holds. So the detection block alone gets a floor,
+       sized from the corpus's own maximum by the caller rather than hardcoded,
+       and every card ends up the same height for free. */
+    .card-body {{
         display: flex;
         flex-direction: column;
     }}
@@ -527,13 +528,23 @@ QUEUE_COLUMNS = 4
 QUEUE_SHOWN = 8
 
 
-def render_brief_card(payload: dict) -> None:
+#: Rendered height of one `.timeline-item`, derived from its own CSS: name row
+#: ~19px, coordinate line 13px + 4px margin, confidence bar 3px + 8px margin,
+#: and 16px margin-bottom.
+DETECTION_SLOT_PX = 64
+
+
+def render_brief_card(payload: dict, slots: int = 1) -> None:
     """
     One brief: scene id, capture time, its detections, and the tile it saw.
 
     Extracted from the queue loop so the same card renders both beside the
     map and in the full-width grid below it, rather than the layout owning a
     private copy of how a brief looks.
+
+    `slots` is how many detections the tallest brief in the corpus carries. The
+    detection block reserves that much room on every card, so a tile that found
+    nothing lines up with one that found two instead of pulling its column up.
     """
     scene_id  = payload.get("scene_id", "?")
     ts        = payload.get("timestamp_utc", "")[:19].replace("T", " ")
@@ -560,7 +571,9 @@ def render_brief_card(payload: dict) -> None:
         f"""<div class="glass-panel brief-card">
 <h4 class="feed-title">{scene_id}</h4>
 <div class="feed-timestamp">ORBITAL TIMESTAMP: {ts} UTC</div>
+<div class="card-body" style="min-height:{max(slots, 1) * DETECTION_SLOT_PX}px">
 {cards_html}
+</div>
 </div>""",
         unsafe_allow_html=True,
     )
@@ -2052,11 +2065,15 @@ def main():
         f"in the audit trail above, with the rule that scheduled it."
     )
 
+    # Every card reserves room for the busiest brief in this corpus, so the
+    # grid lines up regardless of what the detector happened to find.
+    queue_slots = max((len(p.get("anomalies", [])) for p in payloads), default=1)
+
     def _queue_grid(items: list[dict]) -> None:
         grid = st.columns(QUEUE_COLUMNS)
         for i, payload in enumerate(items):
             with grid[i % QUEUE_COLUMNS]:
-                render_brief_card(payload)
+                render_brief_card(payload, slots=queue_slots)
 
     _queue_grid(payloads[:QUEUE_SHOWN])
 

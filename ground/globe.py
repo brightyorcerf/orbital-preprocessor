@@ -230,12 +230,19 @@ def build_globe(
                 satellite, anchor - _dt.timedelta(minutes=33), minutes=100.0
             )
 
-            for seg_lats, seg_lons in split_track_by_antimeridian(track_lats, track_lons):
+            # The track is split at the antimeridian so it does not draw a
+            # horizontal streak across the map, which means one trace per
+            # segment. They are one line to a reader, so only the first claims
+            # a legend row and they share a legend group to toggle together.
+            track_name = f"{satellite} ground track (SGP4)"
+            for i, (seg_lats, seg_lons) in enumerate(
+                split_track_by_antimeridian(track_lats, track_lons)
+            ):
                 fig.add_trace(go.Scattergeo(
                     lat=seg_lats, lon=seg_lons, mode="lines",
                     line=dict(width=1.4, color="#fcd34d", dash="dot"),
-                    name=f"{satellite} ground track (SGP4)",
-                    showlegend=True, hoverinfo="skip",
+                    name=track_name, legendgroup=track_name,
+                    showlegend=(i == 0), hoverinfo="skip",
                 ))
 
             # Spacecraft marker at the true capture instant.
