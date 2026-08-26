@@ -61,9 +61,9 @@ The boundary is softer in exactly one place and [architecture.md §6](architectu
 
 The interesting fault is not the one that crashes. Single-event upsets in INT8 weight memory produce a failure that gets **louder** as it gets worse: past 1% of weight memory flipped, the detector emits **19x the clean detection count**, all of it wrong, with no error raised anywhere in the stack. A model that goes quiet is obvious. A model that goes confidently loud is not.
 
-A CRC-32 per weight tensor catches it out of band: **252 bytes** of state against a 3.69 MB artifact, verified in **11 ms**, no model reload required. The committed sweep runs the full loop over 65,536 flips across all 63 weight tensors: **63 of 63 detected**, mAP 0.836 → 0.359 → 0.836, restored exactly. Numbers and the collapse curve in [Fault tolerance](#fault-tolerance).
+An out-of-band CRC-32 scrub catches it and repairs the artifact to byte-identical in **11 ms**, with no model reload. The committed sweep and the collapse curve are in [Fault tolerance](#fault-tolerance).
 
-Alongside that, every declared fallback in `config/platforms.py` (watchdog timeout, latency budget, model-failure behavior) resolves to a real handler and is exercised by a test; an engine refuses to start against a profile whose declared fallback has no implementation. The resilience suite is checked by mutation as well as by running it: disabling the watchdog comparison fails two tests, letting a degraded brief become the last-known-good fails a third.
+Alongside that, every declared fallback in `config/platforms.py` (watchdog timeout, latency budget, model-failure behavior) resolves to a real handler and is exercised by a test; an engine refuses to start against a profile whose declared fallback has no implementation.
 
 One gap is open and stated rather than papered over: the `degraded` flag exists on the JSON path the pipeline actually uses, and **not** in the protobuf schema, so a degraded brief round-tripped through the declared wire format arrives looking healthy. [architecture.md §2](architecture.md) demonstrates it and scopes the fix.
 
@@ -133,7 +133,12 @@ python ground/rate_distortion.py --tiles val/images --labels val/labels --limit 
 
 ### Latency
 
-`51 ms per tile` is a *mean*, inference only, on a laptop with every core available. Measured as a distribution over 95 held-out DOTA tiles, split into preprocess and inference:
+Measured as a distribution over 95 held-out DOTA tiles, not as a mean. Held to two cores and 4 GB, **p99 end to end is 307.65 ms against the platform's 400 ms budget**: the margin holds at the tail, not just the median.
+
+This is x86 under cgroups, not ARM. A Pi 5 or an Orin Nano has a different instruction mix, so these numbers are a resource-constrained proxy and nothing more.
+
+<details>
+<summary>Full quantile breakdown, preprocess vs inference</summary>
 
 | | p50 | p95 | p99 | mean |
 |---|---|---|---|---|
@@ -146,7 +151,9 @@ python ground/rate_distortion.py --tiles val/images --labels val/labels --limit 
 | inference | 88.07 | 113.72 | 185.76 | 82.44 |
 | end to end | 168.91 | 232.71 | 307.65 | 170.58 |
 
-Milliseconds. Raw output committed under `docs/latency/`. p99 end to end at two cores is 307.65 ms against the platform's 400 ms budget: the margin holds at the tail, not just the median. This is x86 held to two cores, not ARM; a Pi 5 or an Orin Nano has a different instruction mix, so these numbers are a resource-constrained proxy and nothing more.
+Milliseconds. Raw output committed under `docs/latency/`. Note that at two cores preprocessing costs more than inference at p50: `rgb_to_6band`'s two resize calls, not the detector.
+
+</details>
 
 ### Fault tolerance
 
@@ -192,6 +199,11 @@ python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
 
 ### Quantization
 
+**3.43x smaller and 1.83x faster, for 0.9 points of mAP@0.5.** Static INT8 post-training quantization (QDQ, per-channel weights), chosen over dynamic quantization specifically because dynamic makes latency data-dependent, and the assurance story rests on bitwise-identical output across runs.
+
+<details>
+<summary>Full FP32 vs INT8 comparison</summary>
+
 | Metric | FP32 | INT8 | |
 | :--- | ---: | ---: | :--- |
 | Artifact size | 12.67 MB | 3.69 MB | 3.43x smaller |
@@ -202,7 +214,7 @@ python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
 | Bitwise determinism | n/a | PASS | identical output across runs |
 | `skyroot-oam` 400 ms budget | Met | Met | 7.8x margin |
 
-Static INT8 post-training quantization (QDQ, per-channel weights), chosen over dynamic quantization specifically because dynamic makes latency data-dependent, and the assurance story rests on bitwise-identical output across runs.
+</details>
 
 ```bash
 python model/benchmark_quantization.py --platform skyroot-oam
@@ -226,7 +238,7 @@ python model/benchmark_quantization.py --platform skyroot-oam
 
 `eval_suite.py`'s composite is the **minimum** across axes, not the mean: a brief that invents coordinates is not redeemed by having valid JSON.
 
-A green suite is not the claim. A hand-rolled test decorator in this repo once swallowed exceptions, so every test in `tests/test_pipeline.py` reported PASS regardless of its assertions, including a deliberately failing probe. That runner has been deleted in favour of plain pytest. [architecture.md](architecture.md) keeps the incident, and every other retracted number, on the record with the mechanism that caused it, because those are the most instructive parts of the project.
+A green suite is not the claim, so this one is checked by mutation as well as by running it: disabling the watchdog comparison fails two tests, letting a degraded brief become the last-known-good fails a third, and the band-dropout sweep carries a control row that must score 0.000 so the null results above it are known to come from a harness that bites. [architecture.md](architecture.md) records what each suite is and is not evidence for.
 
 ---
 
