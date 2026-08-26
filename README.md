@@ -461,7 +461,7 @@ pip install skyfield                   # needed for the independent-oracle test
 | Frontend | Streamlit, Folium (2D), Plotly (3D globe) |
 | Deploy | Docker, Python 3.10 |
 
-Gemini is called over an API. It is *not* trained, fine-tuned, or hosted here. The only model trained in this repository is the 3.1M-parameter detector.
+The only model trained in this repository is the 3.1M-parameter detector.
 
 ```
 config/     platform profiles + provenance tags
@@ -475,21 +475,4 @@ tools/      brief-corpus generation, TLE refresh, container reproduction check
 ground/     dashboard, 3D globe, episodic memory, LLM analyst, eval suite
 ```
 
-Every decision above is derived, with its alternatives and its costs, in **[architecture.md](architecture.md)**, including the ten hardest questions a reviewer could ask, answered.
-
 ---
-
-## What this is not
-
-Stated plainly so the scope isn't mistaken for a claim:
-
-- **Not validated on satellite imagery.** The detector is trained and scored on DOTA-v1.0 aerial photography, not drawn shapes, but aerial is not orbital: DOTA's GSD is roughly 0.1-1 m against the 10 m the orbital layer models, so objects arrive one to two orders of magnitude larger than a Sentinel-2 pass would deliver them. `tools/generate_briefs.py` refuses to mint Sentinel-2 footprint fields from these tiles without an explicit `--allow-aerial-gsd`.
-- **Not a Skyroot specification.** The `skyroot-oam` profile is a `DERIVED` envelope for a launch-vehicle upper-stage compute class, sized an order of magnitude below `moi-1a` so the INT8 and compression work has to genuinely matter.
-- **No integrity check on the wire.** Briefs carry no checksum, and a single flipped byte survives ingest roughly half the time as a well-formed, wrong observation. Measured, not assumed.
-- **The `degraded` flag is not in the protobuf schema.** It exists on the JSON path the engine and scheduler actually use, and is silently dropped by the wire format the 155-byte figure is measured in.
-- **Silent model corruption is not covered by any fallback.** The declared fallbacks catch failures the system can *see*. A bit-flipped model raises nothing.
-- **The 6-band argument is unsupported.** Every band is a fixed linear combination of R, G and B. Dropping B11 and B12 together costs 0.046 mAP, but the two costliest bands to drop are B2 and B4, plain visible channels.
-- **Not a link budget.** Downlink capacity is rate x duration with a coarse elevation derating, not a computation from antenna gains and noise figures.
-- **Not a licensed ground station.** The Hyderabad site uses Skyroot's corporate coordinates as a planning reference, with a conservative default elevation mask.
-- **Pass predictions inherit TLE age.** The committed snapshot is dated and graded in the UI; a stale element set gives indicative timing, not pointing-grade timing.
-- No real-time AIS fusion. No radiation-hardening certification or RF regulatory compliance. No quantization-aware training. Full atmospheric correction assumed (L2A input).
