@@ -1453,4 +1453,39 @@ Three things go beyond "it is green". `tests/test_resilience.py` was checked by 
 
 ---
 
+## Appendix: reproducing the full pipeline
+
+Training from scratch, on the synthetic corpus, exercises every stage the DOTA run does:
+
+```bash
+python train.py --export          # ~100 min on CPU (26 epochs, synthetic corpus)
+```
+
+The shipping weights are **not** from that path. They come from `tools/kaggle_train_dota.ipynb`, which prepares DOTA-v1.0 via `data/dota_prep.py` (11,046 train / 3,677 val tiles at 640 px, stride 480) and runs the same two-phase schedule for 32 epochs on a Tesla P100, 3 h 11 m wall clock. Reproducing locally is the download-and-export path:
+
+```bash
+# after downloading osp_dota_artifacts.zip from the notebook's Output tab
+unzip osp_dota_artifacts.zip -d .
+python satellite_export.py --weights model/artifacts/osp_best.pt --calib val/images
+python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
+    --images val/images --labels val/labels
+```
+
+> The notebook pins `torch==2.5.1+cu121` when it detects a compute capability below sm_70. Kaggle's preinstalled cu128 build has no kernels for the P100's sm_60, and `torch.cuda.is_available()` returns `True` anyway, so the notebook launches a real kernel to check rather than trusting that flag.
+
+> Training defaults to CPU deliberately. On Apple's MPS backend, the identical run that reaches `cls_loss 0.29 / mAP50 0.99` on CPU diverges to `cls_loss 6.0 / mAP50 0.02` with the same seed and the same data. That's a numerical bug, not a speed trade-off.
+
+The orbital layer and the dashboard's Docker image:
+
+```bash
+python orbital/tle.py                  # element sets in the committed snapshot, with ages
+python tools/refresh_tle.py            # fetch a new dated snapshot from CelesTrak
+
+docker build -f deploy/Dockerfile -t osp-dashboard . && docker run --rm -p 8501:8501 osp-dashboard
+```
+
+That image installs `deploy/requirements-dashboard.txt`, not the root manifest, and serves the committed corpus rather than running the detector, which takes it from roughly 10 GB to 1.46 GB.
+
+---
+
 *Every number in this document names the script that regenerates it. If one does not reproduce, the document is wrong and the code is right.*

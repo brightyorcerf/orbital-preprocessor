@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 250" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <style>
+      .card-bg { fill: #fcfcfb; stroke: rgba(11,11,11,0.10); stroke-width: 1; }
+      .value { fill: #0b0b0b; font-weight: 700; }
+      .label { fill: #52514e; font-weight: 600; }
+      .sub { fill: #898781; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="250" fill="#f9f9f7"/>
+
+  <!-- Card 1: Detection -->
+  <g transform="translate(20,20)">
+    <rect class="card-bg" width="220" height="210" rx="10"/>
+    <rect x="0" y="0" width="220" height="5" rx="2.5" fill="#2a78d6"/>
+    <text x="18" y="70" class="value" font-size="38">0.880</text>
+    <text x="18" y="94" class="label" font-size="14">mAP@0.5, INT8</text>
+    <text x="18" y="130" class="sub" font-size="12">3,677 held-out DOTA tiles</text>
+    <text x="18" y="148" class="sub" font-size="12">real aerial imagery,</text>
+    <text x="18" y="166" class="sub" font-size="12">not synthetic</text>
+  </g>
+
+  <!-- Card 2: Compression -->
+  <g transform="translate(256,20)">
+    <rect class="card-bg" width="220" height="210" rx="10"/>
+    <rect x="0" y="0" width="220" height="5" rx="2.5" fill="#eb6834"/>
+    <text x="18" y="70" class="value" font-size="38">1,480x</text>
+    <text x="18" y="94" class="label" font-size="14">fewer bytes downlinked</text>
+    <text x="18" y="130" class="sub" font-size="12">21 detections as briefs:</text>
+    <text x="18" y="148" class="sub" font-size="12">8.27 KB vs 12.23 MB</text>
+    <text x="18" y="166" class="sub" font-size="12">as raw CCSDS imagery</text>
+  </g>
+
+  <!-- Card 3: Quantization -->
+  <g transform="translate(492,20)">
+    <rect class="card-bg" width="220" height="210" rx="10"/>
+    <rect x="0" y="0" width="220" height="5" rx="2.5" fill="#1baf7a"/>
+    <text x="18" y="70" class="value" font-size="38">3.69 MB</text>
+    <text x="18" y="94" class="label" font-size="14">INT8 detector artifact</text>
+    <text x="18" y="130" class="sub" font-size="12">3.4x smaller, 1.8x faster</text>
+    <text x="18" y="148" class="sub" font-size="12">than FP32, for 0.9 points</text>
+    <text x="18" y="166" class="sub" font-size="12">of mAP</text>
+  </g>
+
+  <!-- Card 4: Latency -->
+  <g transform="translate(728,20)">
+    <rect class="card-bg" width="220" height="210" rx="10"/>
+    <rect x="0" y="0" width="220" height="5" rx="2.5" fill="#eda100"/>
+    <text x="18" y="70" class="value" font-size="38">283 ms</text>
+    <text x="18" y="94" class="label" font-size="14">p99, worst case</text>
+    <text x="18" y="130" class="sub" font-size="12">2 CPUs, 4 GB memory</text>
+    <text x="18" y="148" class="sub" font-size="12">against a 400 ms</text>
+    <text x="18" y="166" class="sub" font-size="12">per-tile budget</text>
+  </g>
+
+  <!-- Card 5: Fault tolerance -->
+  <g transform="translate(964,20)">
+    <rect class="card-bg" width="216" height="210" rx="10"/>
+    <rect x="0" y="0" width="216" height="5" rx="2.5" fill="#4a3aa7"/>
+    <text x="18" y="70" class="value" font-size="38">63/63</text>
+    <text x="18" y="94" class="label" font-size="14">corrupted tensors caught</text>
+    <text x="18" y="130" class="sub" font-size="12">65,536 bit flips injected,</text>
+    <text x="18" y="148" class="sub" font-size="12">CRC-32 scrub restores</text>
+    <text x="18" y="166" class="sub" font-size="12">mAP 0.836 exactly</text>
+  </g>
+</svg>

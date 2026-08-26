@@ -206,6 +206,10 @@ This matters because an earlier version of this README confidently advertised "8
 
 ## Results
 
+![Results at a glance](docs/results_overview.svg)
+
+Five numbers, each backed by a committed artifact and the script that regenerates it, named in the section below. The full derivation, including every retraction and the mutation-tested fault sweep, is in [architecture.md](architecture.md).
+
 ### Detection accuracy
 
 **These numbers are from real aerial imagery.** An earlier version scored 0.992 against tiles `data/synth_demo.py` drew (storage tanks as circles, airplanes as plus-signs) and said plainly the number was close to meaningless and would drop when real imagery replaced it. It did. That was the point.
@@ -291,58 +295,14 @@ Single-event upsets injected uniformly into 25,026,816 bits of quantised weight 
 | ---: | ---: | ---: | ---: |
 | 0 | 0% | 0.836 | 856 |
 | 16,384 | 0.07% | 0.801 | 643 |
-| 32,768 | 0.13% | 0.622 | 475 |
 | 131,072 | 0.52% | 0.030 | 45 |
-| 262,144 | 1.05% | 0.000 | 1 |
-| 524,288 | 2.10% | 0.000 | 1,341 |
 | 1,048,576 | 4.19% | 0.000 | **16,548** |
 
-The detection count is the column to read. Below 0.13% the model is essentially undisturbed. Between 0.13% and 0.52% it collapses, and past 1% it goes silent-then-loud: one detection, then 1,341, then **16,548**, 19x the clean baseline, essentially all of it wrong, with no error raised anywhere in the stack.
+The detection count is the column to read: below 0.13% the model is essentially undisturbed, between 0.13% and 0.52% it collapses, and past 1% it goes silent-then-loud, **16,548 detections, 19x the clean baseline, essentially all of it wrong, with no error raised anywhere in the stack.**
 
-This is a conditional measurement, not a radiation model. It says what survives given N flips. How often N flips occur is a separate input, handled below.
+The fault is catchable, just not by the model. A CRC-32 per weight tensor is 252 B of state against a 3.69 MB artifact and verifies in 15 ms, out of band. The committed sweep runs the full loop: **65,536 flips across all 63 weight tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836**, with `fully_restored: true` asserting the last two are equal rather than close.
 
-**Which bit flips decides almost everything.** The sweep above draws bit positions uniformly, which is the correct physical model and the wrong measuring instrument: it reports the average of eight populations worth wildly different amounts. Confining all 65,536 flips to one position at a time:
-
-| Bit | Weight moves by | mAP@0.5 | Retained |
-| ---: | ---: | ---: | ---: |
-| 0 | 1 | 0.839 | 1.003 |
-| 1 | 2 | 0.846 | 1.011 |
-| 2 | 4 | 0.842 | 1.007 |
-| 3 | 8 | 0.830 | 0.993 |
-| 4 | 16 | 0.796 | 0.952 |
-| 5 | 32 | 0.623 | 0.745 |
-| 6 | 64 | 0.130 | 0.156 |
-| 7 (sign) | −128 | **0.000** | **0.000** |
-
-The bottom half of the byte is free. The top half is where the model lives. Retention near 1.0 in the low rows is the noise floor of a 96-tile evaluation, not radiation helping, and it is the right scale against which to read 0.156. A scheme protecting only the top four bits would buy essentially all the available safety for half the state.
-
-**And the fault is catchable, just not by the model.** A CRC-32 per weight tensor is 252 B of state against a 3.69 MB artifact and verifies in 15 ms, out of band, never asking the model anything. `resilience/protect.py` detects and repairs from a golden copy, which is standard flight practice rather than an invention here. The end-to-end check runs inside the committed sweep: **65,536 flips across all 63 weight tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836**, with `fully_restored: true` asserting the last two are equal rather than close.
-
-Detection alone is worth having even without a golden copy: a spacecraft that can only detect still knows to stop trusting its own output and to request an uplink, which beats silent degradation.
-
-**How often to scrub is then arithmetic.** The detector holds 95% of baseline through **16,384 flips**, 0.065% of its 25,026,816 weight bits:
-
-| Upset rate (per bit per day) | Scrub every |
-| :--- | ---: |
-| 1e−5 | 65.5 days |
-| 1e−6 | 654.7 days |
-| 1e−7 | 6,547 days |
-
-That rate is the one number here tagged `ASSUMED` rather than `MEASURED`, and it cannot be otherwise: OSP has no flight hardware and no radiation test report. Everything downstream is linear in it, so a reader with a real device's test data rescales the table without rerunning anything. Two ceilings, both pointing the same way: upsets are Poisson, so half of all intervals exceed the mean and a real mission sizes against a tail quantile; and multi-bit upsets, where one particle flips several adjacent cells, are ignored entirely.
-
-Band dropout, same 96-tile sample:
-
-| Band dropped | mAP@0.5 | Δ from clean |
-| :--- | ---: | ---: |
-| none | 0.836 | n/a |
-| B2 (blue) | 0.770 | −0.066 |
-| B3 (green) | 0.847 | +0.011 |
-| B4 (red) | 0.785 | −0.051 |
-| B8 (NIR, derived) | 0.844 | +0.008 |
-| B11 (SWIR-1, derived) | 0.833 | −0.003 |
-| B12 (SWIR-2, derived) | 0.843 | +0.007 |
-| B11 + B12 | 0.791 | −0.046 |
-| all six *(control)* | 0.000 | −0.836 |
+Which bit flips matters as much as how many, and dropping any single spectral band costs at most 0.066 mAP except when all six are gone at once, which is fatal. Both breakdowns, and the arithmetic for how often a scrub needs to run against an assumed upset rate, are in [architecture.md](architecture.md#7-failure).
 
 ```bash
 python resilience/degradation.py --images val/images --labels val/labels --tiles 96
@@ -377,67 +337,24 @@ The resilience suite was checked by mutation, not just by running it: disabling 
 ```bash
 conda create -n osp_dev python=3.10 -y && conda activate osp_dev
 pip install -r requirements.txt
+
+streamlit run ground/dashboard.py      # launch the command centre
+python -m pytest tests/ -v             # 92 tests
 ```
 
-Train the detector: dataset prep, stem surgery, two-phase training, ONNX export, INT8 quantization, scored on both backends.
+No API key is baked in; ORION reads one from the sidebar for the visitor's own session. Everything upstream of the reasoning layer, perception, quantization, serialization, the policy engine, runs without any key or network access.
+
+The shipping weights come from `tools/kaggle_train_dota.ipynb` (DOTA-v1.0, 32 epochs on a Tesla P100). To reproduce or extend:
 
 ```bash
-python train.py --export          # ~100 min on CPU (26 epochs, synthetic corpus)
-python train.py --quick --export  # ~3 min smoke test of every stage
-```
-
-The shipping weights are **not** from that path. They come from `tools/kaggle_train_dota.ipynb`, which prepares DOTA-v1.0 via `data/dota_prep.py` (11,046 train / 3,677 val tiles at 640 px, stride 480) and runs the same two-phase schedule for 32 epochs on a Tesla P100, 3 h 11 m wall clock. Reproducing locally is the download-and-export path:
-
-```bash
-# after downloading osp_dota_artifacts.zip from the notebook's Output tab
-unzip osp_dota_artifacts.zip -d .
-python satellite_export.py --weights model/artifacts/osp_best.pt --calib val/images
-python model/evaluate_detector.py --onnx model/artifacts/osp_yolov8n_int8.onnx \
-    --images val/images --labels val/labels
-```
-
-> The notebook pins `torch==2.5.1+cu121` when it detects a compute capability below sm_70. Kaggle's preinstalled cu128 build has no kernels for the P100's sm_60, and `torch.cuda.is_available()` returns `True` anyway, so the notebook launches a real kernel to check rather than trusting that flag.
-
-Run inference, and regenerate the committed brief corpus the dashboard serves:
-
-```bash
+python train.py --quick --export       # ~3 min smoke test of the full pipeline, synthetic corpus
 python inference/engine.py --model model/artifacts/osp_yolov8n_int8.onnx \
   --tiles osp_dataset/images/val --out data/telemetry_out --platform skyroot-oam
-
-python tools/generate_briefs.py        # → data/briefs/ (20 briefs + thumbnails + manifest)
+python tools/generate_briefs.py        # regenerate the committed brief corpus
+python tools/verify_docker_repro.py    # diff a container rebuild against what's committed
 ```
 
-To check that claim rather than trust it, regenerate the corpus inside the mission container and diff it against what is committed:
-
-```bash
-python tools/verify_docker_repro.py --check-only   # prerequisites, no build
-python tools/verify_docker_repro.py                # build, regenerate, diff
-```
-
-The result is worth stating precisely, because it is not a clean pass. On the host, regeneration reproduces the committed corpus 20/20. In the container it reproduces **7/20** exactly; the other 13 carry the same tiles and the same detection counts, with confidences differing by at most one step on the INT8 score ladder (~0.037). Bisected: the ONNX graph returns a bit-identical tensor in both environments and so does the JPEG decode, but the derived 6-band tile does not, because `cv2.resize`'s `INTER_LINEAR` dispatches a different SIMD kernel against the container's CPU feature set. The disagreement is ~1e-8 relative, which against an FP32 detector would be unobservable. Against an INT8 one it is not: quantisation snaps that hair's width onto the next rung of a discrete score ladder. `--strict` demands bit-equality and currently fails, which is the honest state of it.
-
-Inspect the orbital layer, and launch the command centre:
-
-```bash
-python orbital/tle.py                  # element sets in the committed snapshot, with ages
-python tools/refresh_tle.py            # fetch a new dated snapshot from CelesTrak
-
-streamlit run ground/dashboard.py
-docker build -f deploy/Dockerfile -t osp-dashboard . && docker run --rm -p 8501:8501 osp-dashboard
-```
-
-That image installs `deploy/requirements-dashboard.txt`, not the root manifest, and serves the committed corpus rather than running the detector, which takes it from roughly 10 GB to 1.46 GB. No API key is baked in; ORION reads one from the sidebar for the visitor's own session.
-
-Verify everything:
-
-```bash
-python -m pytest tests/ -v             # 92 tests
-pip install skyfield                   # needed for the independent-oracle test
-```
-
-`GEMINI_API_KEY` is needed only for the reasoning layer. Everything upstream, perception, quantization, serialization, the policy engine, runs without any key or network access.
-
-> Training defaults to CPU deliberately. On Apple's MPS backend, the identical run that reaches `cls_loss 0.29 / mAP50 0.99` on CPU diverges to `cls_loss 6.0 / mAP50 0.02` with the same seed and the same data. That's a numerical bug, not a speed trade-off.
+Full commands for training from scratch, the DOTA reproduction path, and TLE tooling are in [architecture.md](architecture.md), along with the training and container-reproducibility caveats worth knowing before you rely on either.
 
 ---
 
