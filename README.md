@@ -1,6 +1,6 @@
 # Orbital Scene Preprocessor
 
-A trained detector finds ships, airplanes, harbors and storage tanks in real satellite tiles at **0.880 mAP**, quantized to **3.69 MB** and **169 ms/tile**. A hand-derived orbital mechanics stack, accurate to **38 m** against an independent implementation, decides when and how much of that result a spacecraft can actually afford to send: **1,480x fewer bytes than the raw imagery, at equal detection accuracy**. A language model narrates the outcome and is architecturally unable to override it.
+A trained detector finds ships, airplanes, harbors and storage tanks in real satellite tiles at **0.880 mAP**, quantized to **3.69 MB** and **169 ms/tile** end to end on two cores. A hand-derived orbital mechanics stack, accurate to **38 m** against an independent implementation, decides when and how much of that result a spacecraft can actually afford to send: **1,484x fewer bytes than the raw imagery, at equal detection accuracy**. A language model narrates the outcome and is architecturally unable to override it.
 
 [Open the live command centre](https://osp-command-centre.streamlit.app/) · [How it works, derived from first principles](architecture.md)
 
@@ -18,10 +18,10 @@ A trained detector finds ships, airplanes, harbors and storage tanks in real sat
 ON-BOARD (constrained)                    │  GROUND (unconstrained)
 ──────────────────────                    │  ─────────────────────
 6-band tile  (640×640×6, 0.61 MB on wire) │
-  → INT8 detector      62 ms              │
+  → INT8 detector      88 ms              │
   → per-class NMS                         │
   → pixel → lat/lon                       │
-  → protobuf brief     155 B              │
+  → protobuf brief     154 B              │
         ↓                                 │
   ┌─ DOWNLINK SCHEDULER ─────────┐        │
   │  committed TLE → SGP4        │        │
@@ -40,7 +40,9 @@ ON-BOARD (constrained)                    │  GROUND (unconstrained)
                                           │       reconciled verdict → tasking request
 ```
 
-Left of the line runs on a compute budget. Right of the line does not.
+Left of the line runs on a compute budget. Right of the line does not. The 88 ms is
+the INT8 inference median at two cores, the constraint the left column is under; the
+full distribution is in [Latency](#latency).
 
 ---
 
@@ -79,7 +81,7 @@ Full commands for training from scratch, the DOTA reproduction path, and TLE too
 
 OSP's answer is to never downlink the image. Detection runs on-orbit; what comes down is a structured brief: a few hundred bytes saying *what* was found, *where*, and *how confident*.
 
-**20 held-out tiles as raw imagery** (CCSDS 123): 12.23 MB, 6.3 contacts. **The same 20 tiles as briefs**: 8.27 KB, one pass, using 0.42% of it. Same 21 detections, **1,480x** fewer bytes.
+**20 held-out tiles as raw imagery** (CCSDS 123): 12,234,137 B, 6.3 contacts. **The same 20 tiles as briefs**: 8,246 B, one pass, using 0.42% of it. Same 21 detections, **1,484x** fewer bytes. That prices briefs as the minified JSON the scheduler actually accounts; as protobuf the same corpus is 3,087 B.
 
 ---
 
@@ -91,7 +93,7 @@ OSP's answer is to never downlink the image. Detection runs on-orbit; what comes
 
 **Extreme compression, priced honestly.** `ground/rate_distortion.py` fixes a byte budget and scores the whole corpus against it, including tiles that never fit a contact. At conf 0.35, briefs match raw lossless detection accuracy exactly, 0.862 recall and 0.920 precision, for 1/663rd the bytes.
 
-**Radiation resilient.** INT8 weights are protected from single-event upsets by a CRC-32 scrub run out of band: 252 bytes of state for the whole 3.69 MB artifact, verified in 15 ms, no model reload required. A committed sweep of 65,536 flips across all 63 weight tensors: 63 of 63 detected, mAP restored from 0.359 back to 0.836 exactly.
+**Radiation resilient.** INT8 weights are protected from single-event upsets by a CRC-32 scrub run out of band: 252 bytes of state for the whole 3.69 MB artifact, verified in 11 ms, no model reload required. A committed sweep of 65,536 flips across all 63 weight tensors: 63 of 63 detected, mAP restored from 0.359 back to 0.836 exactly.
 
 **Graceful degradation.** Every declared fallback in `config/platforms.py` (watchdog timeout, latency budget, model-failure behavior) resolves to a real handler and is exercised by a test; an engine refuses to start against a profile whose declared fallback has no implementation.
 
@@ -167,7 +169,7 @@ python ground/rate_distortion.py --tiles val/images --labels val/labels --limit 
 
 ### Latency
 
-`51 ms per tile` is a *mean*, inference only, on a laptop with every core available. Measured as a distribution over 100 held-out DOTA tiles, split into preprocess and inference:
+`51 ms per tile` is a *mean*, inference only, on a laptop with every core available. Measured as a distribution over 95 held-out DOTA tiles, split into preprocess and inference:
 
 | | p50 | p95 | p99 | mean |
 |---|---|---|---|---|
@@ -195,7 +197,7 @@ Single-event upsets injected uniformly into 25,026,816 bits of quantised weight 
 
 Below 0.13% of weight memory the model is essentially undisturbed; between 0.13% and 0.52% it collapses; past 1% it goes silent-then-loud, 19x the clean detection count, all of it wrong, with no error raised anywhere in the stack.
 
-A CRC-32 per weight tensor catches it out of band: 252 B of state against a 3.69 MB artifact, verified in 15 ms. The committed sweep runs the full loop: 65,536 flips across all 63 weight tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836, restored exactly.
+A CRC-32 per weight tensor catches it out of band: 252 B of state against a 3.69 MB artifact, verified in 11 ms. The committed sweep runs the full loop: 65,536 flips across all 63 weight tensors, 63 of 63 detected, mAP 0.836 → 0.359 → 0.836, restored exactly.
 
 ```bash
 python resilience/degradation.py --images val/images --labels val/labels --tiles 96
@@ -206,13 +208,16 @@ python -m pytest tests/test_resilience.py -v
 
 ## Evaluation
 
-**92 tests locally.** CI runs 84 and skips 8 that need a trained artifact or torch.
+**113 tests locally, all passing.** CI collects the same 113 and runs 97; the 16 that need a trained artifact, a validation split or torch skip visibly rather than being dropped from the run.
 
 | Suite | Covers |
 | :--- | :--- |
-| `tests/test_pipeline.py` (16) | Tensor contracts, geo-projection, protobuf round-trip, memory budget, tile-storage equivalence, DOTA label conversion, rate-distortion accounting, and an accuracy floor on the trained detector |
-| `tests/test_resilience.py` (33) | Fault injection into INT8 weights, dead spectral bands, watchdog overruns, hard model failure, corrupted briefs, plus coverage over `AssuranceProfile` itself |
 | `tests/test_orbital.py` (43) | TLE parsing conventions, frame conversions against Skyfield, pass geometry, the scheduling policy, and the authority boundary |
+| `tests/test_resilience.py` (33) | Fault injection into INT8 weights, dead spectral bands, watchdog overruns, hard model failure, corrupted briefs, plus coverage over `AssuranceProfile` itself |
+| `tests/test_pipeline.py` (16) | Tensor contracts, geo-projection, protobuf round-trip, memory budget, tile-storage equivalence, DOTA label conversion, rate-distortion accounting, and an accuracy floor on the trained detector |
+| `tests/test_protect.py` (8) | CRC-32 weight manifest, upset detection across all 63 tensors, and scrub-to-byte-identical repair |
+| `tests/test_raw_pricing.py` (7) | The CCSDS denominator every compression claim divides by, pinned against the committed manifest |
+| `tests/test_ccsds.py` (6) | The CCSDS 123.0-B-1 encoder itself: predictor, Golomb coder, round-trip |
 | `ground/eval_suite.py` (6 axes) | LLM faithfulness: schema validity, entity grounding, coordinate fidelity, numeric fidelity, citation validity, policy consistency |
 
 `eval_suite.py`'s composite is the **minimum** across axes, not the mean: a brief that invents coordinates is not redeemed by having valid JSON. The resilience suite is checked by mutation as well as by running it: disabling the watchdog comparison fails two tests, letting a degraded brief become the last-known-good fails a third.
@@ -243,8 +248,12 @@ inference/  ONNX engine, NMS, geo-projection, protobuf serialization, explainabi
 rag/        knowledge base + embedding retrieval
 agent/      PolicyEngine and MissionController, the safety envelope
 orbital/    TLE ingest, SGP4, frames, ground stations, passes, downlink scheduler
+resilience/ bit-flip injection, CRC weight protection, degradation sweeps
 tools/      brief-corpus generation, TLE refresh, container reproduction check
-ground/     dashboard, 3D globe, episodic memory, LLM analyst, eval suite
+ground/     dashboard, 3D globe, CCSDS 123 encoder, episodic memory, LLM analyst, eval suite
+deploy/     dashboard-only Docker image and its Hugging Face Space manifest
+tests/      the 113 above
+docs/       committed latency distributions, figures, DOTA dataset spec
 ```
 
 For a full derivation of every number here, byte by byte, plus the fault sweep's bit-level breakdown and the LLM authority boundary's edge cases, see [architecture.md](architecture.md).

@@ -18,7 +18,7 @@ Key upgrades over v1:
   5. Semantic scene description — natural-language scene narrative for operators
 
 Pass a Gemini key via GEMINI_API_KEY, or supply one per call.
-Default: Google Gemini (free tier, gemini-2.0-flash).
+Default: Google Gemini (free tier, gemini-2.5-flash).
 """
 
 import json

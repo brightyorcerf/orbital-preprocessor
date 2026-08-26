@@ -16,9 +16,9 @@ Every figure in this document carries two things: the command that regenerates i
 
 Two states of the repository matter when checking anything below.
 
-`model/artifacts/` and `val/` are gitignored (`.gitignore:73`, `.gitignore:85`). The INT8 graph is 3.7 MB and the held-out split is 3,677 tiles at 396 MB, both reproducible from `tools/kaggle_train_dota.ipynb`. So a clean clone can run the deterministic layers and cannot run the detector. That distinction is load bearing and it recurs throughout.
+`model/artifacts/` and `val/` are gitignored (`.gitignore:52`, `.gitignore:78`). The INT8 graph is 3.7 MB and the held-out split is 3,677 tiles at 396 MB, both reproducible from `tools/kaggle_train_dota.ipynb`. So a clean clone can run the deterministic layers and cannot run the detector. That distinction is load bearing and it recurs throughout.
 
-The full suite is green today: `92 passed in 33.44s` (`MEASURED`, `.venv/bin/python -m pytest tests/ -q`, 2026-08-24, on a machine that has the artifact, the split, and `skyfield` installed). CI runs the same 92 and skips the 8 that need a trained artifact or torch, so the badge means the deterministic layers hold, not that the detector is accurate.
+The full suite is green today: `113 passed in 17.08s` (`MEASURED`, `.venv/bin/python -m pytest tests/ -q`, 2026-08-26, on a machine that has the artifact, the split, and `skyfield` installed). CI collects the same 113 and runs 97, skipping the 16 that need a trained artifact, a validation split or torch, so the badge means the deterministic layers hold, not that the detector is accurate.
 
 ---
 
@@ -32,7 +32,7 @@ theoretical 2,437,197 B   efficiency 0.80   usable 1,949,757 B
 usable passes in the following 24 h: 2
 ```
 
-`MEASURED`, from `orbital/passes.py:find_passes` on the committed snapshot `data/tle/celestrak_resource_2026-08-21.tle`, planned from the last capture time in `data/briefs/manifest.json`. The dashboard computes exactly this in `ground/dashboard.py:557`.
+`MEASURED`, from `orbital/passes.py:find_passes` on the committed snapshot `data/tle/celestrak_resource_2026-08-21.tle`, planned from the last capture time in `data/briefs/manifest.json`. The dashboard computes exactly this in `ground/dashboard.py:749`.
 
 1.95 MB. That is the whole budget. Now price what it would have to carry.
 
@@ -60,8 +60,8 @@ So the arithmetic that shapes everything downstream is a single division:
                                     │
         ┌───────────────────────────┼───────────────────────────┐
         │                           │                           │
-  one 180.7 MB scene          one 0.61 MB tile          one 155 B brief
-   0.0108 of it fits          3.19 of them fit          12,579 of them fit
+  one 180.7 MB scene          one 0.61 MB tile          one 154 B brief
+   0.0108 of it fits          3.19 of them fit          12,660 of them fit
         │                           │                           │
    "come back in                "three tiles              "and 99.6% of the
     93 contacts"                 out of 295"              window is still free"
@@ -73,15 +73,15 @@ That is why on-board inference is not an optimisation here. It is the only opera
 
 Run the real corpus through that real window and the comparison is not close:
 
-> **20 held-out tiles as raw imagery.** 12,234,137 B under CCSDS 123. Against this window's 1.95 MB, that is **6.28 contacts**, about three days at 2 usable passes per day. (`MEASURED`, `DownlinkPlan.raw_downlink_passes`, `orbital/downlink.py`, against `RAW_TILE_BYTES_CCSDS`.)
+> **20 held-out tiles as raw imagery.** 12,234,137 B under CCSDS 123. Against this window's 1.95 MB, that is **6.27 contacts**, about three days at 2 usable passes per day. (`MEASURED`, `DownlinkPlan.raw_downlink_passes`, `orbital/downlink.py`, against `RAW_TILE_BYTES_CCSDS`.)
 >
-> **The same 20 tiles as briefs.** 8,266 B of JSON, 21 detections. **One** pass, using 0.42% of it, with room for 4,700 more briefs. (`MEASURED`, `data/briefs/manifest.json` totals, plus `DownlinkPlan.capacity_in_briefs`.)
+> **The same 20 tiles as briefs.** 8,246 B of JSON, 21 detections. **One** pass, using 0.42% of it, with room for 4,712 more briefs. (`MEASURED`, `data/briefs/manifest.json` totals, plus `DownlinkPlan.capacity_in_briefs`.)
 
 ### The number that moved, and was not updated everywhere
 
 The README's *Why this exists* section states this comparison as "15.8 KB, same 104 detections, 19,863x fewer bytes", and its section 2 notes that "all five deferrals are `oversize-brief`". Neither reproduces against the corpus currently committed.
 
-Both are true of the *previous* corpus. `git show 55dd973:data/briefs/manifest.json` reports 104 anomalies and 15,840 wire bytes, with 5 of its 20 briefs over the 1024 B per-payload cap and 9,898 B actually scheduled, which is exactly 196.6 MB / 9,898 B = 19,863. That corpus was drawn from synthetic drawn-shape tiles. The DOTA regeneration at `3f93609` replaced it with 21 anomalies and 8,266 B, and against the current corpus the scheduler defers nothing at all: **20 of 20 briefs fit, 0 deferrals.**
+Both are true of the *previous* corpus. `git show 55dd973:data/briefs/manifest.json` reports 104 anomalies and 15,840 wire bytes, with 5 of its 20 briefs over the 1024 B per-payload cap and 9,898 B actually scheduled, which is exactly 196.6 MB / 9,898 B = 19,863. That corpus was drawn from synthetic drawn-shape tiles. The DOTA regeneration at `3f93609` replaced it with 21 anomalies and 8,246 B, and against the current corpus the scheduler defers nothing at all: **20 of 20 briefs fit, 0 deferrals.**
 
 So the mechanism behind the stale figure is not sloppiness about arithmetic. It is that a headline was derived from a regenerable artifact, the artifact was regenerated, and the derived text was not re-derived with it. The lesson generalises past this repository: a number that is computed from committed data should either be generated into the document or asserted by a test, because prose does not have a dependency graph.
 
@@ -98,7 +98,7 @@ def bytes_per_contact(self) -> float:
 
 Three lines, and every constant in them is tagged. `SKYROOT_OAM` (`config/platforms.py:161`) declares 32 kbps, 5.0 contact minutes per orbit, 1024 max payload bytes, all `DERIVED`. `MOI_1A` declares 2048 kbps and 8 minutes, also `DERIVED`, against a `PUBLISHED` compute budget.
 
-The `contact_minutes_per_orbit = 5.0` constant is the interesting one, because the orbital layer now contradicts it. The real geometry says a good Hyderabad pass runs 10.155 minutes, so the guess was pessimistic by roughly 2x. Pessimistic is the useful direction to be wrong in, but it was still a guess, and it is now a computation that sits beside the guess rather than replacing it: `ground/rate_distortion.py:337` still prices its contact from the profile constant (1,200,000 B) while `ground/dashboard.py:557` prices its plan from the propagated window (1,949,757 B). Two numbers, two provenances, both labelled. If you see 1.2 MB in one place and 1.95 MB in another, that is why.
+The `contact_minutes_per_orbit = 5.0` constant is the interesting one, because the orbital layer now contradicts it. The real geometry says a good Hyderabad pass runs 10.155 minutes, so the guess was pessimistic by roughly 2x. Pessimistic is the useful direction to be wrong in, but it was still a guess, and it is now a computation that sits beside the guess rather than replacing it: `ground/rate_distortion.py:424` still prices its contact from the profile constant (1,200,000 B) while `ground/dashboard.py:749` prices its plan from the propagated window (1,949,757 B). Two numbers, two provenances, both labelled. If you see 1.2 MB in one place and 1.95 MB in another, that is why.
 
 > ### The interview answer
 >
@@ -116,11 +116,11 @@ Here is a real brief off the wire, `data/briefs/P0019_00000_01920.json`, encoded
 0a1150303031395f30303030305f30313932301218323032362d30382d32315430353a
 34363a30332e3739325a1a2409d5cbef349921254011622cd32f113f2540191ea7e848
 2e25524021516a2fa2ed285240256f12833a2a23080411cfda6d179a33254019d39ffd
-4811285240255305133f2a08c703c1019304b1023500004c423a136f73702d796f6c6f
-76386e2d696e74382d763140a8bb01
+4811285240255305133f2a08c703c1019304b10235666642423a136f73702d796f6c6f
+76386e2d696e74382d763140d70b
 ```
 
-155 bytes. That is one imaged tile, one detected object, its class, its position on the Earth, its confidence, its pixel box, the model that produced it, and how long it took. The whole observation.
+154 bytes. That is one imaged tile, one detected object, its class, its position on the Earth, its confidence, its pixel box, the model that produced it, and how long it took. The whole observation.
 
 Now derive why it looks like that.
 
@@ -148,9 +148,9 @@ The obvious encoding is the one the dashboard already reads, JSON:
  "bbox_px":[455,193,531,305]}],"meta":{...}}
 ```
 
-410 bytes for the same content. Where does the extra 255 go? Almost entirely into three habits JSON cannot break: it spells every field name out on every message, it writes numbers as decimal text, and it writes class names as words. `"type":"harbor"` is 15 characters. The same fact in protobuf is `0804`: two bytes, one for the tag and one for the enum value.
+409 bytes for the same content. Where does the extra 255 go? Almost entirely into three habits JSON cannot break: it spells every field name out on every message, it writes numbers as decimal text, and it writes class names as words. `"type":"harbor"` is 15 characters. The same fact in protobuf is `0804`: two bytes, one for the tag and one for the enum value.
 
-Measured across the whole committed corpus (`MEASURED`, 20 briefs, script in the repro block below): protobuf mean **155.35 B**, JSON mean **413.30 B**, ratio **2.66x**, and against the 0.61 MB CCSDS-compressed tile, **3,938:1**.
+Measured across the whole committed corpus (`MEASURED`, 20 briefs, script in the repro block below): protobuf mean **154.35 B**, JSON mean **412.30 B**, ratio **2.67x**, and against the 0.61 MB CCSDS-compressed tile, **3,963:1**.
 
 ### Field by field
 
@@ -179,7 +179,7 @@ Two different float widths in one message, and the file states its reason at `os
 
 That reason does not survive checking. Round-tripping every coordinate in the committed corpus through float32 gives a worst-case error of **0.126 m** (`MEASURED`). The worst case anywhere on Earth is at longitude 180, where float32's ulp is 1.526e-5 degrees, about **1.7 m**. The 11 m figure comes from reading "7 decimal digits" as 7 significant digits of a three-digit number, which is roughly an order of magnitude pessimistic against the actual binary representation.
 
-So the *stated* justification is wrong and the *decision* is still defensible, for a different reason: at 10 m ground sample distance a 1.7 m worst case is 17% of a pixel, and paying 8 bytes per anomaly plus 16 bytes per footprint to never think about coordinate precision again is cheap insurance on a 155 byte message. Worth knowing what it costs, though: on a one-anomaly brief that is 24 of 155 bytes, 15% of the payload, spent on precision the sensor cannot deliver.
+So the *stated* justification is wrong and the *decision* is still defensible, for a different reason: at 10 m ground sample distance a 1.7 m worst case is 17% of a pixel, and paying 8 bytes per anomaly plus 16 bytes per footprint to never think about coordinate precision again is cheap insurance on a 154 byte message. Worth knowing what it costs, though: on a one-anomaly brief that is 24 of 154 bytes, 16% of the payload, spent on precision the sensor cannot deliver.
 
 `confidence` as float32 is the mirror image and is unambiguously right. A detector score is a noisy quantity with about two meaningful digits. Its float32 round trip on this corpus is exact to 1e-7, which is four orders of magnitude finer than the INT8 score ladder the number came off.
 
@@ -197,7 +197,7 @@ varint bytes for  455 : 2
 varint bytes for   -3 : 10
 ```
 
-`MEASURED`. No coordinate in the committed corpus is negative (84 bbox values, max 640, min 0), but nothing prevents one: `postprocess` converts centre-width boxes to corners at `inference/engine.py:213` and writes `int(b[0])` straight out at `inference/engine.py:340` with no clamp to the tile. A YOLO box whose left edge decodes past the image border produces exactly that. One such coordinate adds 8 bytes to a 155 byte message, and four of them add 32. The fix is one line, `sint32` with zigzag encoding, or a clamp in `postprocess`. Neither is done today.
+`MEASURED`. No coordinate in the committed corpus is negative (84 bbox values, max 640, min 0), but nothing prevents one: `postprocess` converts centre-width boxes to corners at `inference/engine.py:298` and writes `int(b[0])` straight out at `inference/engine.py:308` with no clamp to the tile. A YOLO box whose left edge decodes past the image border produces exactly that. One such coordinate adds 8 bytes to a 154 byte message, and four of them add 32. The fix is one line, `sint32` with zigzag encoding, or a clamp in `postprocess`. Neither is done today.
 
 ### The actual byte layout
 
@@ -219,26 +219,26 @@ off   bytes     field                                          size
        101   19    f3 F64    lon  72.626055                         9
        110   25    f4 F32    confidence 0.5743                      5
        115   2a 08 f5 LEN=8  bbox_px [455, 193, 531, 305]          10
-125   35        f6  F32      inference_ms    51.0                    5
+125   35        f6  F32      inference_ms    48.6                    5
 130   3a 13     f7  LEN=19   model_version   "osp-yolov8n-int8-v1"  21
-151   40 a8bb01 f8  VARINT   compression_ratio 23976                 5
+151   40 d70b   f8  VARINT   compression_ratio 1495                  3
 ────────────────────────────────────────────────────────────────────
-                                                       total       155
+                                                       total       154
 ```
 
 Read the totals column and the architecture of the format falls out:
 
-**The envelope is about 115 bytes and one detection costs about 36.** Check it against the whole corpus, grouped by detection count (`MEASURED`): empty briefs measure 113 to 118 B, one-anomaly briefs 148 to 155 B, two-anomaly briefs 189 to 192 B. The few bytes of spread are varint width, on `compression_ratio` and on the bbox coordinates. So this format is dominated by fixed overhead until roughly four detections per tile, and the marginal cost of finding something is small. That is the right shape for the mission, where most tiles are empty ocean and the interesting ones are not much bigger. It is the wrong shape for a dense-scene sensor, where you would move the footprint and model version into a per-pass header and send anomalies as a stream.
+**The envelope is about 114 bytes and one detection costs about 36.** Check it against the whole corpus, grouped by detection count (`MEASURED`): empty briefs measure 112 to 117 B, one-anomaly briefs 147 to 154 B, two-anomaly briefs 188 to 191 B. The few bytes of spread are varint width, on `compression_ratio` and on the bbox coordinates. So this format is dominated by fixed overhead until roughly four detections per tile, and the marginal cost of finding something is small. That is the right shape for the mission, where most tiles are empty ocean and the interesting ones are not much bigger. It is the wrong shape for a dense-scene sensor, where you would move the footprint and model version into a per-pass header and send anomalies as a stream.
 
-**60 of 155 bytes are strings.** `scene_id`, `timestamp_utc` and `model_version` are 66 bytes with their tags. A scene id derived from the tile grid position, a timestamp as a varint offset from a campaign epoch, and a model version as a two-byte registry id would take that to under 12 bytes and cut the envelope by a third. It has not been done because none of the three is on the critical path of the argument, and readability of a committed corpus is worth real bytes when the corpus is a review artifact.
+**66 of 154 bytes are strings.** `scene_id`, `timestamp_utc` and `model_version` carry 60 bytes of content, 66 with their tags. A scene id derived from the tile grid position, a timestamp as a varint offset from a campaign epoch, and a model version as a two-byte registry id would take that to under 12 bytes and cut the envelope by a third. It has not been done because none of the three is on the critical path of the argument, and readability of a committed corpus is worth real bytes when the corpus is a review artifact.
 
-**`anomaly_count` does not exist on the wire.** The JSON carries it (`inference/engine.py:112`), protobuf does not, and `_proto_to_json_str` reconstructs it from `len(brief.anomalies)` at `inference/serialization_utils.py:242`. This matters more than it looks: `BriefCandidate.from_payload` rejects a brief whose count and list disagree (`orbital/downlink.py:200`), a corruption that is simply **not representable** in the protobuf encoding. The redundant field is a JSON-only failure mode, and removing redundancy removed a class of corruption with it.
+**`anomaly_count` does not exist on the wire.** The JSON carries it (`inference/engine.py:105`), protobuf does not, and `_proto_to_json_str` reconstructs it by rebuilding the dataclass and letting `OSPPayload.to_json` recount the list (`inference/serialization_utils.py:238`). This matters more than it looks: `BriefCandidate.from_payload` rejects a brief whose count and list disagree (`orbital/downlink.py:200`), a corruption that is simply **not representable** in the protobuf encoding. The redundant field is a JSON-only failure mode, and removing redundancy removed a class of corruption with it.
 
 ### Two things this format cannot do
 
 First, and this is the sharpest gap in the project: **`degraded` is not on the wire.**
 
-`inference/engine.py:102` adds `degraded`, `fallback_action` and `fault` to a payload when the perception path fails, and `OSPPayload.to_json` emits them at `inference/engine.py:118`. `osp.proto` has no such fields, and `payload_to_proto` does not map them. Demonstrated:
+`inference/engine.py:95` declares `degraded`, `fallback_action` and `fault` on the payload, and `OSPPayload.to_json` emits them when the perception path fails at `inference/engine.py:108`. `osp.proto` has no such fields, and `payload_to_proto` does not map them. Demonstrated:
 
 ```
 engine JSON : {..."degraded":true,"fallback":{"action":"hold_last_known_good_and_flag_ground",
@@ -246,11 +246,11 @@ engine JSON : {..."degraded":true,"fallback":{"action":"hold_last_known_good_and
 after proto : degraded=False  fallback_action=None  fault=None
 ```
 
-`MEASURED`. A degraded brief round-tripped through the declared wire format arrives on the ground indistinguishable from a fresh observation. The entire fallback story in section 7 rests on that flag being unmistakable, and it is unmistakable on the JSON path, which is what `run_batch` writes, what `tools/generate_briefs.py` commits, and what the scheduler ingests. It is silently dropped by the format the 155 byte figure is measured in.
+`MEASURED`. A degraded brief round-tripped through the declared wire format arrives on the ground indistinguishable from a fresh observation. The entire fallback story in section 7 rests on that flag being unmistakable, and it is unmistakable on the JSON path, which is what `run_batch` writes, what `tools/generate_briefs.py` commits, and what the scheduler ingests. It is silently dropped by the format the 154 byte figure is measured in.
 
-Second, and consequently: **protobuf is not on any runtime path today.** Grep for `serialize_to_binary` outside its own module and every hit is in `tests/test_pipeline.py`. The engine writes JSON, the dashboard reads JSON, the scheduler prices JSON (`orbital/downlink.py:214`), and `ground/rate_distortion.py:146` explicitly prices briefs as minified JSON and calls the protobuf figure the conservative one. So `osp.proto` is a designed, tested, measured format that describes what would ship, and the operational corpus is 2.66x larger than the headline. The rate-distortion result is charged the larger number, so the architectural argument is not affected. The 155 byte claim is a claim about the format, not about the file on disk.
+Second, and consequently: **protobuf is not on any runtime path today.** Grep for `serialize_to_binary` outside its own module and every hit is in `tests/test_pipeline.py`. The engine writes JSON, the dashboard reads JSON, the scheduler prices JSON (`orbital/downlink.py:214`), and `ground/rate_distortion.py:146` explicitly prices briefs as minified JSON and calls the protobuf figure the conservative one. So `osp.proto` is a designed, tested, measured format that describes what would ship, and the operational corpus is 2.67x larger than the headline. The rate-distortion result is charged the larger number, so the architectural argument is not affected. The 154 byte claim is a claim about the format, not about the file on disk.
 
-One more piece of drift worth naming: `osp.proto:64` still documents a "compression ratio ~250,000-500,000:1", and `inference/engine.py:27` still says "~85,000:1, the headline PRD figure". Both are the retracted coverage-mismatched figure from section 9. The class that computes it now labels it `proto_vs_raw_scene_unnormalised` and documents the 324x error in its own docstring (`inference/serialization_utils.py:264`), which is exactly right. The header comments were not updated with it.
+One more piece of drift worth naming: `osp.proto:64` still documents a "compression ratio ~250,000-500,000:1", and `inference/engine.py:27` still says "~85,000:1, the headline PRD figure". Both are the retracted coverage-mismatched figure from section 9. The class that computes it now labels it `proto_vs_raw_scene_unnormalised` and documents the 324x error in its own docstring (`inference/serialization_utils.py:272`), which is exactly right. The header comments were not updated with it.
 
 Reproduce every number in this section:
 
@@ -275,7 +275,7 @@ PY
 
 > ### The interview answer
 >
-> "The brief is 155 bytes of protobuf and I can walk you through every one of them. Sixty of them are strings: scene id, timestamp, model version. Thirty-eight are the tile footprint as four float64s. Thirty-seven are the one detection: class as a two-byte enum instead of the fifteen characters JSON spends on the word `harbor`, lat and lon as float64, confidence as float32 because a detector score has two meaningful digits, and the pixel box as four packed varints. The shape that falls out is a 118-byte envelope plus 37 bytes per detection, which is the right shape when most tiles are empty. Two honest gaps: the schema's stated reason for float64 coordinates overstates float32's error by about ten times, and the degraded flag that the whole fault-tolerance story depends on exists in the JSON encoding and not in the protobuf one, so a degraded brief round-tripped through the declared wire format comes back looking healthy."
+> "The brief is 154 bytes of protobuf and I can walk you through every one of them. Sixty of them are strings: scene id, timestamp, model version. Thirty-eight are the tile footprint as four float64s. Thirty-seven are the one detection: class as a two-byte enum instead of the fifteen characters JSON spends on the word `harbor`, lat and lon as float64, confidence as float32 because a detector score has two meaningful digits, and the pixel box as four packed varints. The shape that falls out is a 117-byte envelope plus 37 bytes per detection, which is the right shape when most tiles are empty. Two honest gaps: the schema's stated reason for float64 coordinates overstates float32's error by about ten times, and the degraded flag that the whole fault-tolerance story depends on exists in the JSON encoding and not in the protobuf one, so a degraded brief round-tripped through the declared wire format comes back looking healthy."
 
 **Concepts you now own.** *Wire-format design under a byte budget*, and specifically the discipline of pricing each field against what it buys. The generalisable moves: enums instead of strings at trust boundaries, matching numeric width to the precision the sensor can actually deliver, understanding your encoder's variable-length integers well enough to know that a sign can cost you 8 bytes, and removing redundant fields because redundancy is a corruption surface. This is the concrete face of *DMLS* chapter 3 on data formats, text against binary, and it applies unchanged to any high-volume telemetry, event log, or feature-store schema where per-record bytes multiply by billions.
 
@@ -297,7 +297,7 @@ That trade is the entire reason `data/tiles.py` exists, and its docstring says s
 
 Before `data/tiles.py`, six different consumers opened tiles themselves with `sorted(dir.glob("*.npy"))` and `np.load`: the training loader, the evaluator, the INT8 calibrator, the quantization benchmark, the inference engine and the brief generator. That was fine while `.npy` was the only form. The moment JPEG tiles appeared, five of the six either raised "no tiles found" or, worse, scored an empty directory as a detector that found nothing.
 
-The second failure is the dangerous one, and it recurs in this project like a refrain: *a pipeline that silently produces an empty result looks exactly like a pipeline that works on an easy input.* The fix is one module that owns the question, plus a test that pins it (`tests/test_pipeline.py:975`, `test_tile_format_equivalence`), which writes the same source pixels in both forms and asserts the arrays agree exactly. PNG rather than JPEG in that test, because lossless is the only way "exactly" is a meaningful word.
+The second failure is the dangerous one, and it recurs in this project like a refrain: *a pipeline that silently produces an empty result looks exactly like a pipeline that works on an easy input.* The fix is one module that owns the question, plus a test that pins it (`tests/test_pipeline.py:870`, `test_tile_format_equivalence`), which writes the same source pixels in both forms and asserts the arrays agree exactly. PNG rather than JPEG in that test, because lossless is the only way "exactly" is a meaningful word.
 
 `read_tile` refuses to return a zero array on a decode failure (`data/tiles.py:72`), for the same reason: a blank tile scores as "found nothing", which is indistinguishable from a genuinely empty scene and would corrupt an accuracy number invisibly.
 
@@ -367,7 +367,7 @@ def reshape_detect_head(model: YOLO, nc: int) -> YOLO:
 
 This used to be a no-op that only logged an intent to change `nc`, on the assumption that Ultralytics' trainer would re-initialise the head on first `train()`. It does not. Exporting straight from the swapped checkpoint produced an ONNX graph with an 80-class COCO head, so the runtime argmax ranged over 80 logits and every detection resolved to "unknown" against the 4-entry class map.
 
-Two things now prevent that shipping again. `verify_stem` checks both ends of the surgery (`model/stem_swap.py:232`), stem in-channels *and* head out-channels, because checking only the stem is exactly what let the 80-class head through. And `postprocess` refuses to run against a mismatched head at all:
+Two things now prevent that shipping again. `verify_stem` checks both ends of the surgery (`model/stem_swap.py:224`), stem in-channels *and* head out-channels, because checking only the stem is exactly what let the 80-class head through. And `postprocess` refuses to run against a mismatched head at all:
 
 ```python
 # inference/engine.py:306
@@ -483,7 +483,7 @@ Per class, the composite hides something (`MEASURED`, `model/artifacts/accuracy_
 | harbor | 4,626 | 0.844 | 0.842 | 0.815 |
 | storage-tank | 5,177 | 0.794 | 0.936 | **0.653** |
 
-Storage-tank precision is 0.936 and recall is 0.653: 3,610 predictions against 5,177 ground-truth instances. The model is not confusing storage tanks with something else, it is failing to find them. Circular tanks in the old synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the oriented-quad to axis-aligned-box conversion (mean 1.73x area inflation, recorded in `prep_manifest.json` by `data/dota_prep.py:381`) hurts tightly-packed tank farms more than isolated aircraft. That class is the honest weak point of this detector, and a single mAP number would have hidden it behind three healthy ones.
+Storage-tank precision is 0.936 and recall is 0.653: 3,610 predictions against 5,177 ground-truth instances. The model is not confusing storage tanks with something else, it is failing to find them. Circular tanks in the old synthetic corpus were trivially separable; real ones sit in refinery clutter at varying scale, and the oriented-quad to axis-aligned-box conversion (mean 1.73x area inflation, recorded in `prep_manifest.json` by `data/dota_prep.py:376`) hurts tightly-packed tank farms more than isolated aircraft. That class is the honest weak point of this detector, and a single mAP number would have hidden it behind three healthy ones.
 
 > ### The interview answer
 >
@@ -520,7 +520,7 @@ The conventional detector preprocessing is letterbox: scale the longest side to 
 The reason is downstream, in the geo projection:
 
 ```python
-# inference/engine.py:348
+# inference/engine.py:330
 lat = footprint["lat_max"] - (cy_px / tile_size) * (footprint["lat_max"] - footprint["lat_min"])
 lon = footprint["lon_min"] + (cx_px / tile_size) * (footprint["lon_max"] - footprint["lon_min"])
 ```
@@ -663,7 +663,7 @@ Refinement is not cosmetic. The grid step is the dominant error in the reported 
 
 Two more decisions in `find_passes` that keep the contact-count honest:
 
-**Truncated windows are flagged, not extrapolated.** A run touching either end of the search span is a pass already under way at the start, or still under way at the end. Its true AOS or LOS lies outside what was propagated, so the sample time is kept and the window is marked `truncated_aos` / `truncated_los` (`orbital/passes.py:190`). `next_pass` then skips them entirely (`orbital/passes.py:233`), because planning a downlink against the tail of a pass the spacecraft is already flying through would promise a full window's bytes when only part remains. The dashboard excludes truncated windows from its passes-per-day count for the same reason (`ground/dashboard.py:605`).
+**Truncated windows are flagged, not extrapolated.** A run touching either end of the search span is a pass already under way at the start, or still under way at the end. Its true AOS or LOS lies outside what was propagated, so the sample time is kept and the window is marked `truncated_aos` / `truncated_los` (`orbital/passes.py:190`). `next_pass` then skips them entirely (`orbital/passes.py:233`), because planning a downlink against the tail of a pass the spacecraft is already flying through would promise a full window's bytes when only part remains. The dashboard excludes truncated windows from its passes-per-day count for the same reason (`ground/dashboard.py:757`).
 
 **Passes shorter than 30 seconds are discarded** (`orbital/passes.py:140`). A 20 second grazing contact cannot complete antenna acquisition, let alone move data, so counting it would inflate the contacts-per-day figure with windows nobody could use.
 
@@ -695,13 +695,13 @@ A third test cross-checks two independently written pieces of geometry against e
 
 One more consequence of using real geometry: it constrains things you would otherwise be free to make up.
 
-The committed brief corpus is anchored to a specific instant, `CAMPAIGN_START_UTC = 2026-08-21 05:46:00Z` (`tools/generate_briefs.py:83`), and each of the 20 tiles is placed at the subpoint the spacecraft actually occupied, spaced by the *computed* subpoint ground speed (6.7497 km/s, `MEASURED`, recorded in `data/briefs/manifest.json`) rather than by the often-quoted 7.5 km/s orbital speed, which would space tiles about 13% too far apart and leave gaps in a strip described as contiguous.
+The committed brief corpus is anchored to a specific instant, `CAMPAIGN_START_UTC = 2026-08-21 05:46:00Z` (`tools/generate_briefs.py:81`), and each of the 20 tiles is placed at the subpoint the spacecraft actually occupied, spaced by the *computed* subpoint ground speed (6.7497 km/s, `MEASURED`, recorded in `data/briefs/manifest.json`) rather than by the often-quoted 7.5 km/s orbital speed, which would space tiles about 13% too far apart and leave gaps in a strip described as contiguous.
 
 The anchor was first set at 05:44:00Z. That pass is still over inland Maharashtra: a strip labelled "Laccadive Sea" would have been over farmland. By 05:46:00Z the subpoint is at 10.8°N 72.7°E, in open water, and the whole 19 second strip stays over sea. `test_corpus_is_over_water_in_the_laccadive_sea` (`tests/test_orbital.py:524`) now enforces it, alongside `test_corpus_footprints_sit_on_the_real_ground_track` (`tests/test_orbital.py:500`), which asserts every footprint centre matches the propagated subpoint at that brief's own timestamp to 1e-4 degrees.
 
 Two minutes of anchor is the difference between a demo that is honest and one that is decorative, and the only reason it was catchable is that the geometry was real enough to be wrong.
 
-The corpus imagery is committed at 384 px JPEG rather than full-resolution PNG (`tools/generate_briefs.py:204`), which took 16 MB to 588 KB. Boxes are drawn at full resolution so they land on the exact detected pixels, then the composite is downscaled once. The imagery is context, not evidence: the brief JSON carries bbox coordinates at full precision, and detail no reader can use is not worth 16 MB of repository weight.
+The corpus imagery is committed at 384 px JPEG rather than full-resolution PNG (`tools/generate_briefs.py:202`), which took 16 MB to 588 KB. Boxes are drawn at full resolution so they land on the exact detected pixels, then the composite is downscaled once. The imagery is context, not evidence: the brief JSON carries bbox coordinates at full precision, and detail no reader can use is not worth 16 MB of repository weight.
 
 > ### The interview answer
 >
@@ -755,16 +755,16 @@ Three lines, and the asymmetry is the whole design. Read it as a state machine:
         so a broken model is exactly as harmless as a silent one
 ```
 
-The model can raise an alarm and can never lower one. And `UNKNOWN` maps to 0, so the three ways the LLM can fail (unavailable, timed out, unparseable) collapse into the one behaviour: the policy verdict stands and the pipeline continues. `_build_policy_fallback_brief` (`agent/mission_controller.py:413`) fills a structurally valid brief carrying the policy verdict, so no downstream consumer needs to branch on whether the model ran.
+The model can raise an alarm and can never lower one. And `UNKNOWN` maps to 0, so the three ways the LLM can fail (unavailable, timed out, unparseable) collapse into the one behaviour: the policy verdict stands and the pipeline continues. `_build_policy_fallback_brief` (`agent/mission_controller.py:411`) fills a structurally valid brief carrying the policy verdict, so no downstream consumer needs to branch on whether the model ran.
 
 **3. The scheduler's interface has no seam.**
 
 ```python
-# orbital/downlink.py:519
+# orbital/downlink.py:539
 def plan(self, window: ContactWindow, candidates: Iterable[BriefCandidate]) -> DownlinkPlan:
 ```
 
-A window and a list of briefs. There is no argument, hook or callback through which a model can reach the decision: not an optional one, not an ignored-by-default one. Priorities come from `score_brief` (`orbital/downlink.py:287`), a pure function of a brief's own fields. `DownlinkPlan` is frozen (`orbital/downlink.py:359`), so the object handed to the analyst for narration cannot be edited by it.
+A window and a list of briefs. There is no argument, hook or callback through which a model can reach the decision: not an optional one, not an ignored-by-default one. Priorities come from `score_brief` (`orbital/downlink.py:287`), a pure function of a brief's own fields. `DownlinkPlan` is frozen (`orbital/downlink.py:381`), so the object handed to the analyst for narration cannot be edited by it.
 
 That last point is the difference between a convention and a property. A convention says "the analyst should not modify the plan". A frozen dataclass says attempting it raises `FrozenInstanceError`, which is what `tests/test_orbital.py:431` asserts.
 
@@ -772,12 +772,12 @@ Two choices inside `plan()` follow from the same reasoning and both cost measura
 
 **Greedy first-fit, not optimal packing.** This is technically a knapsack problem and greedy is not optimal for it, so the plan leaves a few percent of window utilisation on the table. Optimal packing improves utilisation by *reordering*: dropping a higher-priority observation to slot in a smaller lower-priority one. Priority order is the mission. Utilisation is a diagnostic. Trading the first for the second produces a worse system that scores better, so strict priority order is the correct behaviour rather than a shortcut.
 
-**A hand-written scoring function, not a learned ranker.** A learned model would almost certainly order briefs better. It would also make the answer to "why was this brief dropped?" a matrix multiplication. On a vehicle where every autonomous action must trace to a rule, that is a worse system even when it ranks better. The policy is six named constants readable in one screen (`orbital/downlink.py:65` through `:93`), deliberately, because the policy is the artifact a reviewer should argue with.
+**A hand-written scoring function, not a learned ranker.** A learned model would almost certainly order briefs better. It would also make the answer to "why was this brief dropped?" a matrix multiplication. On a vehicle where every autonomous action must trace to a rule, that is a worse system even when it ranks better. The policy is six named constants readable in one screen (`orbital/downlink.py:65` through `:95`), deliberately, because the policy is the artifact a reviewer should argue with.
 
 **4. The decision carries the policy that produced it.**
 
 ```python
-# orbital/downlink.py:466
+# orbital/downlink.py:486
 def policy_fingerprint() -> str:
 ```
 
@@ -785,7 +785,7 @@ A SHA-256 over the six scheduling constants, truncated to 12 hex characters, sta
 
 This is the difference between an audit trail and a log file. A log file says what happened. An audit trail lets you re-derive whether what happened was correct under the rules in force at the time. Without the hash, a plan from last month replayed against this month's constants produces a different answer and nothing anywhere says the comparison was invalid. With it, the mismatch is visible immediately.
 
-Every decision also carries its rule, one of three (`orbital/downlink.py:567`, `:585`, `:596`): `oversize-brief`, `fits-in-budget`, `budget-exhausted`. The dashboard renders every one of them with the running byte count (`ground/dashboard.py:700`).
+Every decision also carries its rule, one of three (`orbital/downlink.py:587`, `:605`, `:616`): `oversize-brief`, `fits-in-budget`, `budget-exhausted`. The dashboard renders every one of them with the running byte count (`ground/dashboard.py:872`).
 
 ### The three tests that hold the line
 
@@ -809,7 +809,7 @@ b = sched.plan(w, list(reversed(cands))).to_dict()
 assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 ```
 
-**What it catches.** Any dependency of the plan on input order, iteration order, dict ordering, floating-point accumulation order, or hidden state carried between runs. Reversing the input is the cheap way to catch all of them at once. This is the property that makes a decision replayable, which is what the policy hash is for. It passes because ties break on `scene_id` (`orbital/downlink.py:546`), not on arrival order.
+**What it catches.** Any dependency of the plan on input order, iteration order, dict ordering, floating-point accumulation order, or hidden state carried between runs. Reversing the input is the cheap way to catch all of them at once. This is the property that makes a decision replayable, which is what the policy hash is for. It passes because ties break on `scene_id` (`orbital/downlink.py:566`), not on arrival order.
 
 ```python
 # tests/test_orbital.py:458
@@ -849,7 +849,7 @@ if llm_ovv.get("trigger") and llm_ovv.get("target_coords"):
 **What it is.** It is a model-authored proposal, tagged `source="llm"`, that enters the same list as policy-authored proposals and is presented to an operator as an OVV request. On a system where OVV requests were actually uplinked, this line would be the thing to remove. And there is a second-order effect that is easy to miss:
 
 ```python
-# agent/mission_controller.py:410
+# agent/mission_controller.py:408
 ovv_requests = sorted(ovv_requests, key=lambda r: r.priority)[:3]
 ```
 
@@ -857,7 +857,7 @@ The cap is three, sorted by a priority number that, for the LLM entry, **the LLM
 
 Both facts are worth holding together. Four mechanisms make authority a property of the interface, and one function accepts a model-authored proposal into an action list where it can outbid a rule-authored one for a capped slot. The first four are the architecture. The fifth is where the architecture is not yet finished.
 
-`config/platforms.py:92` states `llm_in_control_loop = False` as a profile constraint, a property of the deployment target rather than a convention someone can refactor away, and `tests/test_resilience.py:395` asserts it for every profile while also checking structurally that no fallback handler has a seam for an advisor.
+`config/platforms.py:90` states `llm_in_control_loop = False` as a profile constraint, a property of the deployment target rather than a convention someone can refactor away, and `tests/test_resilience.py:395` asserts it for every profile while also checking structurally that no fallback handler has a seam for an advisor.
 
 > ### The interview answer
 >
@@ -885,14 +885,14 @@ That state is worse than having no declaration at all. It reads as a safety prop
 
 The fix has three parts and the third is the one that matters.
 
-First, `inference/engine.py` no longer raises. `run_tile` is a guard around `_perceive`: any exception out of the perception path, and any pass that overruns the watchdog, is converted into the profile's declared fallback brief, flagged `degraded` (`inference/engine.py:628`).
+First, `inference/engine.py` no longer raises. `run_tile` is a guard around `_perceive`: any exception out of the perception path, and any pass that overruns the watchdog, is converted into the profile's declared fallback brief, flagged `degraded` (`inference/engine.py:596`).
 
-Second, each declared string resolves to a real handler in `FALLBACK_HANDLERS` (`inference/engine.py:497`). `moi-1a` gets `emit_empty_brief_with_cloud_estimate`: a well-formed brief with no detections but a live cloud estimate, because cloud cover is a threshold over one band that costs microseconds and does not touch the model, so it survives exactly the failures that take the detector down. `skyroot-oam` gets `hold_last_known_good_and_flag_ground`: the last successful detection set, re-asserted and flagged as held, because on a manoeuvring stage losing perception for one tile is not an emergency but silently losing the scene picture while the vehicle continues to act on it is.
+Second, each declared string resolves to a real handler in `FALLBACK_HANDLERS` (`inference/engine.py:465`). `moi-1a` gets `emit_empty_brief_with_cloud_estimate`: a well-formed brief with no detections but a live cloud estimate, because cloud cover is a threshold over one band that costs microseconds and does not touch the model, so it survives exactly the failures that take the detector down. `skyroot-oam` gets `hold_last_known_good_and_flag_ground`: the last successful detection set, re-asserted and flagged as held, because on a manoeuvring stage losing perception for one tile is not an emergency but silently losing the scene picture while the vehicle continues to act on it is.
 
 Third, and this is the structural move:
 
 ```python
-# inference/engine.py:520
+# inference/engine.py:488
 declared = self.profile.assurance.fallback_on_model_failure
 if declared not in FALLBACK_HANDLERS:
     raise ValueError(
@@ -906,9 +906,9 @@ if declared not in FALLBACK_HANDLERS:
 
 Three smaller decisions in the fallback path are worth naming because each closes a specific way this could rot:
 
-- **A held brief copies its anomalies rather than aliasing them** (`inference/engine.py:487`). Sharing the list means editing one payload rewrites history in the other. `tests/test_resilience.py:311` asserts non-aliasing.
-- **A degraded brief never becomes the last-known-good** (`inference/engine.py:638`, only reached on a clean, in-budget pass). Otherwise repeated failures would hold a hold of a hold, and staleness would compound invisibly. `tests/test_resilience.py:322` asserts it.
-- **A hold with no history degrades further rather than inventing** (`inference/engine.py:474`). A failure on the first tile of a campaign has nothing to hold, so it emits an empty flagged brief and says so in the fault string, rather than fabricating a plausible one.
+- **A held brief copies its anomalies rather than aliasing them** (`inference/engine.py:457`). Sharing the list means editing one payload rewrites history in the other. `tests/test_resilience.py:311` asserts non-aliasing.
+- **A degraded brief never becomes the last-known-good** (`inference/engine.py:606`, only reached on a clean, in-budget pass). Otherwise repeated failures would hold a hold of a hold, and staleness would compound invisibly. `tests/test_resilience.py:322` asserts it.
+- **A hold with no history degrades further rather than inventing** (`inference/engine.py:441`). A failure on the first tile of a campaign has nothing to hold, so it emits an empty flagged brief and says so in the fault string, rather than fabricating a plausible one.
 
 And the nominal path is byte-for-byte what it was before the guard existed: a healthy brief carries none of the degradation fields (`tests/test_resilience.py:350`), so the fallback machinery costs zero bytes in the case that matters.
 
@@ -950,7 +950,7 @@ This is the same idea as `test_scheduler_interface_exposes_no_model_hook`, point
   bit flips in INT8 weights     →  NOTHING. Nothing at all.                 ✗
 ```
 
-The watchdog is honest about what it models (`inference/engine.py:402`). On real flight hardware a watchdog is an external timer that resets the compute, and software does not get to observe its own overrun. Here the overrun is detected in-process, after the fact. What is modelled faithfully is the *recovery* path: fall back to the declared behaviour and flag ground, which is what the flight system would do on reset. What is not modelled is the reset itself.
+The watchdog is honest about what it models (`inference/engine.py:374`). On real flight hardware a watchdog is an external timer that resets the compute, and software does not get to observe its own overrun. Here the overrun is detected in-process, after the fact. What is modelled faithfully is the *recovery* path: fall back to the declared behaviour and flag ground, which is what the flight system would do on reset. What is not modelled is the reset itself.
 
 ### The first fault the model cannot see: silent bit flips, which get louder
 
@@ -991,7 +991,7 @@ If the perception path cannot see the fault, the check has to sit outside the pe
 | `verify()` | 252 B, one CRC-32 per weight tensor | yes | no |
 | `scrub()` | the above plus a golden copy of the weights | yes | yes |
 
-Detection alone is nearly free — 252 bytes of state against a 3.69 MB artifact, one linear pass in **15 ms** — and it is worth having on its own. A spacecraft that can only detect still knows to stop trusting its own detections and to request an uplink, which is a great deal better than the silent degradation it replaces.
+Detection alone is nearly free — 252 bytes of state against a 3.69 MB artifact, one linear pass in **11 ms** — and it is worth having on its own. A spacecraft that can only detect still knows to stop trusting its own detections and to request an uplink, which is a great deal better than the silent degradation it replaces.
 
 CRC-32 rather than a cryptographic hash, deliberately: the adversary is a particle, not a person. CRC-32 catches every 1-, 2- and 3-bit error in a block this size and all odd-weight errors, which is the failure mode exactly, and `zlib.crc32` is stdlib and implemented in C.
 
@@ -1098,7 +1098,7 @@ Everything in `ground/eval_suite.py` is the reconstruction of that metric into s
 
 ### Parity first: two encodings, one schema
 
-`payload_to_json` (`inference/serialization_utils.py:217`) does not serialise the dataclass. It converts to protobuf and back out to JSON through `_proto_to_json_str`, so the dashboard's JSON and the wire binary are guaranteed to carry the same fields by construction rather than by discipline. Any field that does not survive the proto round trip is visibly absent from both, which is how the missing `degraded` field in section 2 is discoverable at all.
+`payload_to_json` (`inference/serialization_utils.py:220`) does not serialise the dataclass. It converts to protobuf and back out to JSON through `_proto_to_json_str`, so the dashboard's JSON and the wire binary are guaranteed to carry the same fields by construction rather than by discipline. Any field that does not survive the proto round trip is visibly absent from both, which is how the missing `degraded` field in section 2 is discoverable at all.
 
 ### Retrieval, and three ways it silently lies
 
@@ -1116,7 +1116,7 @@ All three share a signature: retrieval still returns *k* results, ranked, plausi
 
 `ground/scene_memory.py` is SQLite with two tables and three indexes, holding scenes and anomalies across passes. `query_region` does a bounding-box prefilter in SQL then refines with Haversine (`ground/scene_memory.py:254`), which is the right shape: the index does the cheap work and the exact distance does the correct work.
 
-One naming imprecision worth flagging, since the LLM reads this text: `HistoricalAnomaly.pass_number` is documented as "how many orbital passes ago" (`ground/scene_memory.py:51`) but is assigned as the enumeration rank of the returned row (`ground/scene_memory.py:309`). It is a recency ordinal, not a pass count. The string reaches the prompt as "observed 3 pass(es) ago", which is a claim the field does not support.
+One naming imprecision worth flagging, since the LLM reads this text: `HistoricalAnomaly.pass_number` is documented as "how many orbital passes ago" (`ground/scene_memory.py:51`) but is assigned as the enumeration rank of the returned row (`ground/scene_memory.py:305`). It is a recency ordinal, not a pass count. The string reaches the prompt as "observed 3 pass(es) ago", which is a claim the field does not support.
 
 ### Six axes, and why the composite is a minimum
 
@@ -1189,7 +1189,7 @@ The old headline was **85,000:1**. Here is where it came from:
 
 The numerator is a whole scene. The denominator describes one 640 px tile. A Sentinel-2 10 m band is 10,980 px square, which tiles into `ceil(10980/640)² = 18² = 324` tiles. **The ratio was inflated by 324x by a coverage mismatch**, and nothing in the arithmetic was wrong: every number was correct, and they described different things.
 
-The class that computes it now says so in its own docstring, keeps the field because the dashboard reads it, and renames it `proto_vs_raw_scene_unnormalised` beside a `..._normalised` figure that charges the scene the full 324 briefs needed to describe it (`inference/serialization_utils.py:264`). Its printed report labels the legacy line "do not quote".
+The class that computes it now says so in its own docstring, keeps the field because the dashboard reads it, and renames it `proto_vs_raw_scene_unnormalised` beside a `..._normalised` figure that charges the scene the full 324 briefs needed to describe it (`inference/serialization_utils.py:272`). Its printed report labels the legacy line "do not quote".
 
 That is the first lesson of this section: **a ratio is a claim about two things, and most bad ratios are correct arithmetic over mismatched denominators.**
 
@@ -1202,26 +1202,26 @@ Every compression claim this project made divided by **9,830,400 B**: one tile a
 So the alternative OSP was beating was not a codec. It was the absence of one.
 
 ```
-   priced as              per tile        20-tile corpus     ratio vs 8,266 B
+   priced as              per tile        20-tile corpus     ratio vs 8,246 B
    ─────────────────────  ─────────────   ──────────────     ────────────────
-   float32 in memory      9,830,400 B     196,608,000 B          23,785 : 1
-   lossless PNG, uint16   2,546,639 B      50,932,783 B           6,162 : 1
-   CCSDS 123.0-B-1          611,707 B      12,234,137 B           1,480 : 1
+   float32 in memory      9,830,400 B     196,608,000 B          23,842 : 1
+   lossless PNG, uint16   2,546,639 B      50,932,783 B           6,177 : 1
+   CCSDS 123.0-B-1          611,707 B      12,234,137 B           1,484 : 1
 ```
 
-**16x, from the top row to the bottom.** The per-tile figure falls from 63,279:1 to 3,938:1 by the same factor.
+**16x, from the top row to the bottom.** The per-tile figure falls from 63,689:1 to 3,963:1 by the same factor.
 
 What makes this one worth recording rather than merely fixing is that the repository already contained the correct reasoning and did not apply it. `ground/rate_distortion.py` had refused to price raw at float32 since it was written, on the explicit grounds that doing so "would inflate OSP's advantage by roughly 2x for free" — and then priced it as PNG, a codec no spacecraft flies, while the README divided by float32 anyway. Three prices for one tile, in one repository, differing by 16x end to end: the experiment was strict, the headline was not, and nothing forced them to agree.
 
 `ground/ccsds123.py` now implements the standard, `orbital/downlink.py` defaults to `RAW_TILE_BYTES_CCSDS` and names `RAW_TILE_BYTES_FLOAT32` separately so the distinction cannot be made by accident, `data/briefs/manifest.json` records `raw_ccsds_bytes` per tile beside `wire_bytes` per brief, and `tests/test_raw_pricing.py` fails if the quoted ratio and the committed artifact drift apart.
 
-One note in the other direction, because this baseline is generous to the opponent and that should be said before someone else says it: CCSDS 123 reaches **1.99 bits per sample** on this corpus, which is better than it would manage on a real instrument. Five of these six bands are linear functions of the first three (`prep_manifest.json` states this outright), so the inter-band predictor is exploiting redundancy a measuring sensor would never supply. On genuine multispectral data the raw side costs more and OSP's margin is wider than 1,480x. The number reported is the unkind one.
+One note in the other direction, because this baseline is generous to the opponent and that should be said before someone else says it: CCSDS 123 reaches **1.99 bits per sample** on this corpus, which is better than it would manage on a real instrument. Five of these six bands are linear functions of the first three (`prep_manifest.json` states this outright), so the inter-band predictor is exploiting redundancy a measuring sensor would never supply. On genuine multispectral data the raw side costs more and OSP's margin is wider than 1,484x. The number reported is the unkind one.
 
 The second lesson is worse than the first, and it survives fixing both denominators.
 
 ### Why a ratio is the wrong question entirely
 
-The honest per-tile ratio on the current corpus is 3,938:1 (155 B protobuf against a 0.61 MB CCSDS-compressed tile). The previous synthetic corpus reported 43,497:1. **The number went up, and that is not good news.** Nothing about the encoding improved. These 20 tiles average 1.05 detections per brief where the synthetic scenes were denser, and an emptier brief is a smaller brief. The largest per-scene ratio in the corpus belongs to a brief containing **zero detections**, because an empty brief is nearly free.
+The honest per-tile ratio on the current corpus is 3,963:1 (154 B protobuf against a 0.61 MB CCSDS-compressed tile). The previous synthetic corpus reported 43,497:1. **The number went up, and that is not good news.** Nothing about the encoding improved. These 20 tiles average 1.05 detections per brief where the synthetic scenes were denser, and an emptier brief is a smaller brief. The largest per-scene ratio in the corpus belongs to a brief containing **zero detections**, because an empty brief is nearly free.
 
 So a compression ratio partly measures how empty your scenes happened to be. That is a property of the dataset, not of the method.
 
@@ -1240,7 +1240,7 @@ And it answers the wrong question anyway. An operator does not ask how small a b
 then counts what the ground knows about the **whole corpus**:
 
 ```python
-# ground/rate_distortion.py:290
+# ground/rate_distortion.py:363
 cum_cost = np.cumsum(s.cost)
 cum_tp   = np.cumsum(s.tp)
 for b in budgets:
@@ -1251,7 +1251,7 @@ for b in budgets:
 
 `total_gt` is every labelled object in the corpus, including objects on tiles that never fit the budget.
 
-**That denominator is the entire experiment.** Score only the tiles that were delivered and every strategy trends to 1.0, which is exactly the flattering non-result this replaces: a codec that preserves a tile perfectly but only affords three tiles has still lost everything on the fourth. `tests/test_pipeline.py:925` pins the accounting with a hand-checkable case (three tiles, two objects each, 100 B apiece) and asserts that a budget below one tile recovers nothing, that recall is monotonic in budget, and that it saturates at 1.0 without exceeding it.
+**That denominator is the entire experiment.** Score only the tiles that were delivered and every strategy trends to 1.0, which is exactly the flattering non-result this replaces: a codec that preserves a tile perfectly but only affords three tiles has still lost everything on the fourth. `tests/test_pipeline.py:820` pins the accounting with a hand-checkable case (three tiles, two objects each, 100 B apiece) and asserts that a budget below one tile recovers nothing, that recall is monotonic in budget, and that it saturates at 1.0 without exceeding it.
 
 ### The result
 
@@ -1273,7 +1273,7 @@ for b in budgets:
 
 Two raw rows, because the codec is the whole difference. Both deliver identical pixels and therefore identical detections; PNG charges four times as much for them. PNG filters bytes within a plane and cannot see the band axis at all, while CCSDS 123 predicts each band from the bands beside it, which on a six-band cube derived from three is most of the available redundancy. The PNG row stays in the table because every earlier version of this document quoted it, and because a reader should be able to see what choosing the wrong lossless codec costs.
 
-Not approximately, and it is not luck. The brief *is* the raw tile's detection result at the deployed threshold, and the ground station runs the same detector either way. `build_strategies` computes onboard detections once and the raw strategy filters that same result (`ground/rate_distortion.py:250`), because a lossless downlink means the ground sees identical pixels and therefore identical detections. The row is a tautology made visible, and it is the sharpest form of the architecture's argument: **at the deployed operating point, downlinking pixels buys the ground literally nothing over downlinking the answer.**
+Not approximately, and it is not luck. The brief *is* the raw tile's detection result at the deployed threshold, and the ground station runs the same detector either way. `build_strategies` computes onboard detections once and the raw strategy filters that same result (`ground/rate_distortion.py:286`), because a lossless downlink means the ground sees identical pixels and therefore identical detections. The row is a tautology made visible, and it is the sharpest form of the architecture's argument: **at the deployed operating point, downlinking pixels buys the ground literally nothing over downlinking the answer.**
 
 JPEG never reaches that recall at any quality: it peaks at 0.828 at q75, for 53.3 MB.
 
@@ -1297,19 +1297,19 @@ stride 1,000    : ship  5,270   airplane 1,528   storage-tank 1,414   harbor 1,2
 
 `MEASURED`. The first 1,000 tiles hold **zero storage tanks**. An earlier draft of the rate-distortion table was built that way and was wrong, and the mAP it produced was a three-class mAP wearing a four-class label. Note the failure is silent again: nothing errors when a class has no ground truth, `average_precision` returns NaN for it (`model/evaluate_detector.py:104`) and the class is simply dropped from the mean (`model/evaluate_detector.py:279`).
 
-Both tools now sample at even stride (`model/evaluate_detector.py:312`, `ground/rate_distortion.py:470`), which is deterministic, unlike a random sample, and reproduces the corpus class balance to within 0.7 points per class. The stride sample's 9,472 objects is exactly the `total_ground_truth_objects` in the committed artifact.
+Both tools now sample at even stride (`model/evaluate_detector.py:312`, `ground/rate_distortion.py:545`), which is deterministic, unlike a random sample, and reproduces the corpus class balance to within 0.7 points per class. The stride sample's 9,472 objects is exactly the `total_ground_truth_objects` in the committed artifact.
 
 ### The comparison is set up to be unkind to OSP
 
 Three ways, each explicit in the code and repeated in the artifact's `caveats` list:
 
 - **Raw is priced under CCSDS 123.0-B-1** (`ground/ccsds123.py`), the lossless standard for compressing image cubes on board a spacecraft, not as PNG and not as the 9.83 MB float32 array held in memory. CCSDS 123 costs about half what PNG does on this corpus, so this is the strongest fair opponent available rather than a convenient one. It is arguably *too* strong: it reaches 1.99 bits per sample here because five of the six bands are linear functions of the first three, redundancy a measuring instrument would not supply.
-- **Briefs are priced as minified JSON** (`ground/rate_distortion.py:140`), when the protobuf they really ship in is 2.66x smaller.
+- **Briefs are priced as minified JSON** (`ground/rate_distortion.py:236`), when the protobuf they really ship in is 2.67x smaller.
 - **Ground-side detection uses the same detector at the same threshold as onboard**, so the pixel strategies are never handicapped by a weaker analyst.
 
-JPEG is the fair lossy baseline here for a specific reason: the six bands are a fixed linear map of RGB, so a tile's information content *is* its RGB, and compressing the RGB then re-deriving loses what the codec loses and nothing more. That would not hold for a sensor that measured its infrared independently, and the module says so at `ground/rate_distortion.py:41` rather than leaving it as an unstated advantage.
+JPEG is the fair lossy baseline here for a specific reason: the six bands are a fixed linear map of RGB, so a tile's information content *is* its RGB, and compressing the RGB then re-deriving loses what the codec loses and nothing more. That would not hold for a sensor that measured its infrared independently, and the module says so at `ground/rate_distortion.py:57` rather than leaving it as an unstated advantage.
 
-**What the curve cannot show**, stated alongside it (`ground/rate_distortion.py:63`): pixels can be re-analysed later, with a better model, for a question nobody has asked yet. A brief cannot. A brief is also unfalsifiable at the ground: if the onboard detector missed something, no amount of ground processing recovers it, and nothing in the brief reveals that it happened. The plot measures one axis of value and the architecture trades away another.
+**What the curve cannot show**, stated alongside it (`ground/rate_distortion.py:76`): pixels can be re-analysed later, with a better model, for a question nobody has asked yet. A brief cannot. A brief is also unfalsifiable at the ground: if the onboard detector missed something, no amount of ground processing recovers it, and nothing in the brief reveals that it happened. The plot measures one axis of value and the architecture trades away another.
 
 ### The green suite that could not go red
 
@@ -1350,7 +1350,7 @@ Note the scope carefully. `meta.inference_ms` is excluded because a wall-clock n
 
 > ### The interview answer
 >
-> "The compression claim used to be a single ratio, eighty-five thousand to one, and it was correct arithmetic over mismatched denominators: a whole hundred-megabyte scene divided by one tile's brief, when a scene is three hundred and twenty-four tiles. But fixing the coverage does not fix the metric, because a ratio still partly measures how empty your scenes were. The largest ratio in my corpus belongs to a brief with zero detections. So I replaced it with a rate-distortion curve: fix a byte budget, spend it three ways, raw lossless, JPEG across a quality sweep, and briefs across a confidence sweep, and count what the ground knows about the *whole* corpus, with objects on tiles that never fit counted as missed. That denominator is the entire experiment: score only what was delivered and every strategy trends to one. The result is that the brief at confidence 0.35 ties raw lossless exactly, 0.862 recall and 0.920 precision, for one two-thousand-six-hundredth of the bytes, because the brief *is* the raw tile's detection result at the deployed threshold. And it exposed a hard constraint nobody chose: above about 0.7 confidence this detector emits nothing at all, so an operator threshold of 0.8 silently downlinks empty briefs forever."
+> "The compression claim used to be a single ratio, eighty-five thousand to one, and it was correct arithmetic over mismatched denominators: a whole hundred-megabyte scene divided by one tile's brief, when a scene is three hundred and twenty-four tiles. But fixing the coverage does not fix the metric, because a ratio still partly measures how empty your scenes were. The largest ratio in my corpus belongs to a brief with zero detections. So I replaced it with a rate-distortion curve: fix a byte budget, spend it three ways, raw lossless, JPEG across a quality sweep, and briefs across a confidence sweep, and count what the ground knows about the *whole* corpus, with objects on tiles that never fit counted as missed. That denominator is the entire experiment: score only what was delivered and every strategy trends to one. The result is that the brief at confidence 0.35 ties raw lossless exactly, 0.862 recall and 0.920 precision, for one six-hundred-and-sixty-third of the bytes, because the brief *is* the raw tile's detection result at the deployed threshold. And it exposed a hard constraint nobody chose: above about 0.7 confidence this detector emits nothing at all, so an operator threshold of 0.8 silently downlinks empty briefs forever."
 
 **Concepts you now own.** *Operating-point curves instead of single-metric claims*, and specifically choosing the denominator that matches the decision being made. *Baselines must be constructed to be unkind to you*, priced generously and analysed with the same model. *Sampling design is a correctness concern*: a prefix is not a sample, and a class that vanishes from your evaluation set does not raise an error. And *your test harness is untested code until you make it go red on purpose*. These are *DMLS* chapter 6 (evaluation, baselines, slice-based evaluation) and chapter 2 (choosing the objective that matches the decision), and the sampling lesson recurs everywhere data is ordered by anything correlated with the label.
 
@@ -1366,7 +1366,7 @@ Engineering judgment, not a wishlist. For each: what it costs, and what question
 *Why not yet:* it would not change what this round was about, which is closing the loop between real orbital mechanics and a real resource decision. Doing it half-heartedly, on a handful of hand-labelled scenes, would produce a number too noisy to compare against 3,677 tiles and would read as a stronger claim than it was.
 
 **An integrity check on the wire.**
-*Cost:* an afternoon. A CRC-32 or a truncated HMAC as a proto field, computed over the serialised message, is 4 to 8 bytes on a 155 byte brief: 3 to 5% of the payload.
+*Cost:* an afternoon. A CRC-32 or a truncated HMAC as a proto field, computed over the serialised message, is 4 to 8 bytes on a 154 byte brief: 3 to 5% of the payload.
 *Settles:* the measured gap in section 7, where a single flipped byte survives ingest roughly half the time as a well-formed wrong observation. It converts an undetectable corruption into a detectable one, which is the difference between a false observation and a lost one, and the ingest layer already knows what to do with a lost one.
 *Why not yet:* honestly, because measuring the gap was more interesting than closing it, and because the fix is uninteresting enough that it should come with the two other wire-format changes it belongs beside: `sint32` for bbox coordinates, and a `degraded` field so the flag in section 2 survives the encoding. Those three together are one commit, and I would rather ship them as a versioned schema change than as three patches.
 
@@ -1403,7 +1403,7 @@ The honest summary: real channel surgery, real INT8 calibration across six plane
 
 **3. "Your INT8 calibration tiles come from the split you score INT8 on. Isn't that leakage?"**
 
-Yes, and the size is stated: 32 tiles out of 3,677, so roughly 0.9% of the scoring set was seen by the calibrator. Calibration fits activation ranges, not weights, so the effect is second-order: it can only make the observed activation ranges slightly better matched to those 32 tiles, and activation range is a much coarser quantity than a decision boundary. But it is not zero, and the INT8 column is not independent of its calibration data. The fix is trivial (calibrate on training tiles, which `train.py:131` already suggests as the default `--calib` path) and has not been redone because the artifact would have to be regenerated and every downstream number with it.
+Yes, and the size is stated: 32 tiles out of 3,677, so roughly 0.9% of the scoring set was seen by the calibrator. Calibration fits activation ranges, not weights, so the effect is second-order: it can only make the observed activation ranges slightly better matched to those 32 tiles, and activation range is a much coarser quantity than a decision boundary. But it is not zero, and the INT8 column is not independent of its calibration data. The fix is trivial (calibrate on training tiles, which `train.py:130` already suggests as the default `--calib` path) and has not been redone because the artifact would have to be regenerated and every downstream number with it.
 
 **4. "Your container reproduces 7 of 20 briefs bit-exactly. Isn't your reproducibility claim broken?"**
 
@@ -1425,13 +1425,13 @@ Both, at different scopes, and the scopes are worth separating. `bitwise_determi
 
 **8. "Your README quotes numbers your committed corpus does not reproduce. How much of the rest should I trust?"**
 
-Three cases, all named in this document. The "15.8 KB, 104 detections, five oversize deferrals" figures are true of the previous corpus (`git show 55dd973:data/briefs/manifest.json`) and not of the current one, which schedules 20 of 20 with zero deferrals and totals 8,266 B. The committed `resilience/artifacts/degradation.json` *was* the synthetic-split sweep while the README's fault-tolerance table quoted an uncommitted DOTA re-run, so for a while the dashboard rendered a shape the README had already corrected. That one is closed: `degradation_dota.json` is committed, both documents read from it, and the dashboard prefers it. And "the maximum confidence this model produces anywhere is 0.683" is a maximum over one sweep's tiles; a 96-tile stride sample finds 0.7143.
+Three cases, all named in this document. The "15.8 KB, 104 detections, five oversize deferrals" figures are true of the previous corpus (`git show 55dd973:data/briefs/manifest.json`) and not of the current one, which schedules 20 of 20 with zero deferrals and totals 8,246 B. The committed `resilience/artifacts/degradation.json` *was* the synthetic-split sweep while the README's fault-tolerance table quoted an uncommitted DOTA re-run, so for a while the dashboard rendered a shape the README had already corrected. That one is closed: `degradation_dota.json` is committed, both documents read from it, and the dashboard prefers it. And "the maximum confidence this model produces anywhere is 0.683" is a maximum over one sweep's tiles; a 96-tile stride sample finds 0.7143.
 
 What that says about the rest: every number in the README has a script, and the ones that drifted are the ones a script produces into a *file* while the prose was written by hand. The numbers backed by committed artifacts (`quant_benchmark.json`, `accuracy_int8.json`, `rate_distortion.json`, `docs/latency/*.json`) reproduce exactly, and I checked them for this document. The general defence is the one section 1 draws: derived prose needs a dependency graph, and the only ones available are code generation or an assertion in a test.
 
-**9. "Nothing in your runtime path uses protobuf. Isn't the 155-byte number theatre?"**
+**9. "Nothing in your runtime path uses protobuf. Isn't the 154-byte number theatre?"**
 
-It is a claim about the format, not about the files on disk, and the distinction matters in one direction only. `serialize_to_binary` appears nowhere outside `inference/serialization_utils.py` except in `tests/test_pipeline.py`: the engine writes JSON, the dashboard reads JSON, and the scheduler prices JSON. So today the corpus really is 2.66x larger than the headline.
+It is a claim about the format, not about the files on disk, and the distinction matters in one direction only. `serialize_to_binary` appears nowhere outside `inference/serialization_utils.py` except in `tests/test_pipeline.py`: the engine writes JSON, the dashboard reads JSON, and the scheduler prices JSON. So today the corpus really is 2.67x larger than the headline.
 
 Two things keep this from being decorative. The rate-distortion experiment, which carries the architectural argument, prices briefs as **minified JSON** and says so in its caveats, so the operating-point result is charged the larger number and the protobuf figure never enters it. And the schema is exercised end to end by the round-trip tests, which is how the missing `degraded` field in section 2 is discoverable at all. What is fair to say: the wire format is designed, tested and measured, and it has not yet been made the transport. Making it the transport is the same one commit as the integrity check and the `sint32` fix.
 
