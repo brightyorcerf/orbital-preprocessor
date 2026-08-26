@@ -1045,8 +1045,43 @@ def next_contact_from_now(satellite: str, station_key: str) -> dict | None:
         return None
 
 
+@st.cache_resource(show_spinner=False)
+def _propagator(satellite: str):
+    """
+    The SGP4 propagator, built once and kept.
+
+    `cache_resource` rather than `cache_data`: this is a live object, not a
+    value, and rebuilding it every second to move a marker would dominate the
+    cost of moving the marker.
+    """
+    from orbital.propagate import propagator_for
+    from orbital.tle import load_snapshot
+
+    return propagator_for(satellite, load_snapshot())
+
+
+def live_subpoint(satellite: str) -> dict | None:
+    """
+    Where the spacecraft is right now, propagated from the committed TLE.
+
+    Called once per fragment tick. This is one SGP4 evaluation, which is
+    microseconds, so the marker moves without the page doing any real work.
+    Deliberately not cached: a cached position is not a position.
+    """
+    try:
+        sp = _propagator(satellite).at(_dt.datetime.now(_dt.timezone.utc))
+        return {
+            "lat": sp.latitude_deg,
+            "lon": sp.longitude_deg,
+            "alt_km": sp.altitude_km,
+        }
+    except Exception:
+        return None
+
+
 @st.fragment(run_every="1s")
-def render_hero(plan: dict, acc: dict, live: dict | None = None) -> None:
+def render_hero(plan: dict, acc: dict, live: dict | None = None,
+                satellite: str | None = None) -> None:
     """
     The mission console: time to next contact, the link budget being consumed,
     and the instruments that matter, refreshed once a second.
@@ -1116,6 +1151,18 @@ def render_hero(plan: dict, acc: dict, live: dict | None = None) -> None:
         ("LLM in control loop", "FALSE" if not plan.get("_llm_in_control_loop") else "TRUE",
          "enforced by the interface", not plan.get("_llm_in_control_loop"))
     )
+
+    # Where the spacecraft actually is, this second. The rest of the page is
+    # a plan; this is the only thing on it that is happening now.
+    sp = live_subpoint(satellite) if satellite else None
+    if sp:
+        instruments.append((
+            "Subpoint now",
+            f"{abs(sp['lat']):.2f}°{'N' if sp['lat'] >= 0 else 'S'} "
+            f"{abs(sp['lon']):.2f}°{'E' if sp['lon'] >= 0 else 'W'}",
+            f"{sp['alt_km']:,.0f} km altitude, SGP4 live",
+            False,
+        ))
 
     cells = "".join(
         f"<div class='instrument'><span class='k'>{k}</span>"
@@ -1235,6 +1282,159 @@ FAILURE_MODES = [
      "Invisible to the model. Caught out of band by a CRC-32 scrub, repaired from the golden copy",
      "test_an_upset_model_still_loads_and_runs, tests/test_protect.py"),
 ]
+
+
+RD_ARTIFACT = (
+    Path(__file__).resolve().parent.parent / "model" / "artifacts" / "rate_distortion.json"
+)
+
+#: Which strategy families the explorer draws, and how they are named and
+#: coloured. Order is the reading order: the thing being argued for last.
+RD_FAMILIES = (
+    ("raw",   "Raw tiles, lossless",      "#c1121f"),
+    ("jpeg",  "JPEG tiles",               "#4b9fff"),
+    ("brief", "Semantic briefs",          "#2ecc9b"),
+)
+
+
+@st.cache_data(show_spinner=False)
+def load_rate_distortion(path: str = str(RD_ARTIFACT)) -> dict:
+    """The committed rate-distortion experiment, or {} if it has not been run."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def _rd_envelope(data: dict, family: str) -> tuple[list[int], list[float]]:
+    """
+    The best recall this family reaches at each budget, across its settings.
+
+    A family is a set of operating points, not a single curve: JPEG has eight
+    qualities and the brief has eight thresholds. At a given budget an operator
+    would pick the setting that returns the most, so the envelope is the fair
+    reading and the same one `ground/rate_distortion.py` plots.
+    """
+    members = [pts for label, pts in data.get("curves", {}).items()
+               if label.startswith(family)]
+    if not members:
+        return [], []
+    budgets = sorted({p["budget_bytes"] for pts in members for p in pts})
+    best = []
+    for b in budgets:
+        vals = [p["recall"] for pts in members for p in pts if p["budget_bytes"] == b]
+        best.append(max(vals) if vals else 0.0)
+    return budgets, best
+
+
+def render_rate_distortion_explorer() -> None:
+    """
+    The experiment, made interactive: fix a byte budget, see what the ground
+    ends up knowing.
+
+    This is the project's central claim and it was previously a static PNG. The
+    static version answers one question at one budget. The point of the
+    experiment is that the answer *changes* with the budget, and that the
+    crossover happens somewhere a reader can find for themselves. Nothing here
+    is recomputed live: all 22 operating points and their 60-budget sweeps are
+    committed in `model/artifacts/rate_distortion.json`, so moving the control
+    is a lookup, not a simulation. That is the honest version, and it is also
+    the fast one.
+    """
+    data = load_rate_distortion()
+    if not data:
+        st.info(
+            "No rate-distortion artifact found. Generate it with "
+            "`python ground/rate_distortion.py --tiles val/images "
+            "--labels val/labels --limit 1000`."
+        )
+        return
+
+    import plotly.graph_objects as go
+
+    st.markdown("#### WHAT THE GROUND LEARNS, PER BYTE")
+    st.caption(
+        f"{data['tiles']:,} held-out DOTA tiles, "
+        f"{data['total_ground_truth_objects']:,} labelled objects. Recall counts "
+        "objects on tiles that never fit as missed, which is the whole "
+        "experiment: a codec that preserves four tiles perfectly and cannot "
+        "afford the fifth has still lost everything on the fifth."
+    )
+
+    envelopes = {fam: _rd_envelope(data, fam) for fam, _, _ in RD_FAMILIES}
+    all_budgets = sorted({b for bs, _ in envelopes.values() for b in bs})
+    if not all_budgets:
+        st.info("Rate-distortion artifact has no curves to draw.")
+        return
+
+    contact_bytes = int(data.get("contact", {}).get("bytes_per_contact", 0))
+    default = min(all_budgets, key=lambda b: abs(b - contact_bytes)) if contact_bytes \
+        else all_budgets[len(all_budgets) // 2]
+
+    budget = st.select_slider(
+        "Byte budget for this downlink",
+        options=all_budgets,
+        value=default,
+        format_func=lambda b: f"{b / 1e6:.2f} MB" if b >= 1e6 else f"{b / 1e3:,.1f} KB",
+        help="One contact's worth of bytes is marked on the curve. Drag to "
+             "spend more or less and watch what each strategy returns.",
+    )
+
+    fig = go.Figure()
+    for fam, label, colour in RD_FAMILIES:
+        bs, rs = envelopes[fam]
+        if not bs:
+            continue
+        fig.add_trace(go.Scatter(
+            x=bs, y=rs, name=label, mode="lines",
+            line=dict(color=colour, width=2.4),
+            hovertemplate="%{y:.1%} of objects known<br>%{x:,.0f} B<extra>" + label + "</extra>",
+        ))
+
+    fig.add_vline(x=budget, line=dict(color="#f5f5f5", width=1.4, dash="dot"))
+    if contact_bytes:
+        fig.add_vline(x=contact_bytes, line=dict(color="#6b7280", width=1, dash="dash"))
+        fig.add_annotation(
+            x=contact_bytes, y=1.04, text="one contact", showarrow=False,
+            font=dict(size=10, color="#6b7280"), xanchor="left",
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter", color="#d4d4d4", size=12),
+        margin=dict(l=10, r=10, t=30, b=10), height=380,
+        xaxis=dict(type="log", title="bytes downlinked",
+                   gridcolor="rgba(255,255,255,0.06)"),
+        yaxis=dict(title="corpus recall", range=[0, 1.08],
+                   gridcolor="rgba(255,255,255,0.06)"),
+        legend=dict(orientation="h", y=1.14, x=0),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    # What each family actually returns at the selected budget, read off the
+    # same committed curves the plot is drawn from.
+    cols = st.columns(len(RD_FAMILIES))
+    for col, (fam, label, _) in zip(cols, RD_FAMILIES):
+        bs, rs = envelopes[fam]
+        recall = 0.0
+        if bs:
+            idx = max((i for i, b in enumerate(bs) if b <= budget), default=None)
+            recall = rs[idx] if idx is not None else 0.0
+        known = int(round(recall * data["total_ground_truth_objects"]))
+        # Not `delta`: Streamlit renders a direction arrow on any delta, and an
+        # up-arrow beside "0 of 9,472" reads as a gain that did not happen.
+        col.metric(label, f"{recall:.1%}")
+        col.caption(f"{known:,} of {data['total_ground_truth_objects']:,} objects known")
+
+    st.caption(
+        "Every point is measured, not modelled. The briefs win by never "
+        "sending the image, and the gap is widest exactly where a real "
+        "contact window sits."
+    )
 
 
 def render_resilience_panel() -> None:
@@ -1548,6 +1748,7 @@ def main():
                     plan,
                     load_detector_accuracy(),
                     next_contact_from_now(sat_choice, station_choice),
+                    sat_choice,
                 )
                 render_mission_plan(plan)
         except Exception as e:
@@ -1694,9 +1895,18 @@ def main():
             with grid[i % 3]:
                 render_brief_card(payload)
 
-    # ── Fault injection results ───────────────────────────────────────────────
+    # ── Evidence ──────────────────────────────────────────────────────────────
+    # The three measurements that carry the argument, given equal billing and
+    # full width. The rate-distortion curve and the radiation work used to sit
+    # below the fold as a static image and a buried expander respectively,
+    # which billed the project's two strongest results as footnotes.
     st.divider()
-    render_resilience_panel()
+    st.markdown("### EVIDENCE")
+    ev1, ev2 = st.tabs(["RATE-DISTORTION", "RADIATION TOLERANCE"])
+    with ev1:
+        render_rate_distortion_explorer()
+    with ev2:
+        render_resilience_panel()
 
     # ── OVV command ────────────────────────────────────────────────────────────
     if send_ovv:
