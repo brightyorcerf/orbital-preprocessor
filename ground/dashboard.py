@@ -878,21 +878,44 @@ def render_mission_plan(plan: dict) -> None:
     # ── The counterfactual ────────────────────────────────────────────────────
     # Everything above says what the brief pipeline costs. This says what the
     # alternative costs, in the same units, over the same propagated window.
-    raw_mb = plan["_n_tiles"] * plan["_raw_tile_bytes"] / 1e6
+    raw_bytes = plan["_n_tiles"] * plan["_raw_tile_bytes"]
+    raw_mb = raw_bytes / 1e6
     passes = plan["_raw_passes"]
     # Contacts per day for this pairing, from the same geometry that produced
     # the window — not a rule of thumb.
-    days = passes / max(1e-9, plan.get("_passes_per_day", 2.0))
+    ppd = plan.get("_passes_per_day", 2.0)
+
+    # On a wide link the whole corpus fits in one pass, so `passes` falls below
+    # one and the old `:,.0f` rendered it as "0 contacts versus one for the
+    # briefs": raw imagery free, briefs expensive, the exact inverse of the
+    # argument, sitting under the headline panel. Twenty tiles do not strain a
+    # 2048 kbps link and pretending they do would be the dishonest repair. State
+    # what is true at each operating point instead.
+    if passes >= 1.0:
+        verdict = (
+            f"that is <b>{passes:,.1f} contacts</b> "
+            f"(~{passes / max(1e-9, ppd):,.1f} days at {ppd:.1f} usable "
+            f"passes/day) versus <b>one</b> for the briefs"
+        )
+    else:
+        raw_pct = raw_bytes / max(1, b["usable_bytes"]) * 100.0
+        brief_pct = b["bytes_used"] / max(1, b["usable_bytes"]) * 100.0
+        verdict = (
+            f"the raw imagery fits inside a single contact too, taking "
+            f"<b>{raw_pct:.0f}%</b> of the pass against the briefs' "
+            f"<b>{brief_pct:.2f}%</b>. A link this wide is not strained by "
+            f"twenty tiles; what strains it is the backlog, and the "
+            f"per-observation cost is what carries over"
+        )
+
     st.markdown(
         f"<div class='mission-strip' style='display:block; line-height:1.7;'>"
         f"<b>The same observations as raw imagery:</b> "
         f"{plan['_n_tiles']} tiles x {plan['_raw_tile_bytes'] / 1e6:.2f} MB "
         f"(CCSDS 123 lossless) = {raw_mb:,.0f} MB. "
-        f"At this window's {b['usable_bytes'] / 1e6:.2f} MB, that is "
-        f"<b>{passes:,.0f} contacts</b> (~{days:,.0f} days at "
-        f"{plan.get('_passes_per_day', 2.0):.1f} usable passes/day) versus "
-        f"<b>one</b> for the briefs. Same detections, "
-        f"{raw_mb * 1e6 / max(1, b['bytes_used']):,.0f}x fewer bytes."
+        f"At this window's {b['usable_bytes'] / 1e6:.2f} MB, {verdict}. "
+        f"Same detections, "
+        f"{raw_bytes / max(1, b['bytes_used']):,.0f}x fewer bytes."
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1104,10 +1127,13 @@ def render_hero(plan: dict, acc: dict, live: dict | None = None,
     # windows and the qualifiers say so, because a reader who assumed the
     # bytes belonged to the ticking clock would be reading a number that
     # nothing on this page actually computed.
+    # Usable downlink and scheduled bytes are not here: the progress bar
+    # directly above already carries both, and the plan panel below states them
+    # a third time. LLM-in-control-loop is not here either; the platform strip
+    # above owns that claim. What is left is what nothing else on the page
+    # says: the live pass geometry, the detector's accuracy, and where the
+    # spacecraft is this second.
     instruments = [
-        ("Usable downlink", f"{usable / 1e6:.2f} MB",
-         f"{b['downlink_kbps']:.0f} kbps, {w['duration_s'] / 60:.1f} min, planned window", False),
-        ("Scheduled", f"{used:,} B", f"{pct:.2f}% of the planned window", False),
         ("Peak elevation",
          f"{(live or w)['max_elevation_deg']:.1f}°",
          f"{(live or w)['quality']}, {'next pass' if live else 'planned window'}", False),
@@ -1117,10 +1143,6 @@ def render_hero(plan: dict, acc: dict, live: dict | None = None,
             ("Detector mAP@0.5", f"{acc['map50']:.3f}",
              f"{acc.get('tiles', 0):,} held-out tiles", False)
         )
-    instruments.append(
-        ("LLM in control loop", "FALSE" if not plan.get("_llm_in_control_loop") else "TRUE",
-         "enforced by the interface", not plan.get("_llm_in_control_loop"))
-    )
 
     # Where the spacecraft actually is, this second. The rest of the page is
     # a plan; this is the only thing on it that is happening now.
@@ -1165,8 +1187,8 @@ def render_header(platform_key: str | None) -> None:
     """Render the title, the thesis line and the authority strip."""
     st.markdown("<h2 style='margin-top:0;'>OSP COMMAND CENTRE</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='thesis'>What this spacecraft downlinks on its next contact, "
-        "decided by rule, not by a model.</div>",
+        "<div class='thesis'>A downlink schedule computed from a real orbital "
+        "pass.</div>",
         unsafe_allow_html=True,
     )
 
@@ -1192,8 +1214,10 @@ def render_header(platform_key: str | None) -> None:
             ("Inference budget",
              f"{assurance.max_inference_latency_ms:.0f} ms",
              f"watchdog {assurance.watchdog_timeout_s:.0f} s"),
+            # The only place this is stated. It used to appear here and again
+            # in the hero instruments, with two different qualifiers.
             ("LLM in control loop", authority,
-             "deterministic execution required"
+             "enforced by the interface, not by prompt"
              if assurance.deterministic_execution_required else "advisory only"),
             ("Policy fingerprint", policy_fingerprint(),
              "changes if any scheduling constant changes"),
@@ -1927,32 +1951,20 @@ def main():
     status_color = "#f5f5f5" if total_anomalies > 0 else "#8b8b8b"
     status_text = "ANOMALY DETECTED" if total_anomalies > 0 else "NOMINAL"
 
-    # Detector accuracy belongs above the fold. It is the number a reader is
-    # actually trying to find, and it sat only in a chart caption several
-    # screens down.
-    acc = load_detector_accuracy()
-    acc_stat = ""
-    if acc.get("map50"):
-        acc_stat = (
-            f'<div class="mission-stat">Detector mAP@0.5 '
-            f'<span class="val">{acc["map50"]:.3f}</span>'
-            f'<span class="sub">{acc.get("tiles", "?"):,} held-out tiles</span></div>'
-        )
-
+    # Detector mAP is not here: the hero instruments above the fold state it
+    # once. It was in both, identically, which is a second copy to keep in sync
+    # for no reader benefit.
     tiles = [
         f'<div class="mission-stat">Queue state <span class="val" style="color:{status_color}">{status_text}</span></div>',
         f'<div class="mission-stat">Briefs in queue <span class="val">{n_briefs}</span></div>',
         f'<div class="mission-stat">Detections <span class="val">{total_anomalies}</span></div>',
-        acc_stat,
         f'<div class="mission-stat">Mean inference <span class="val">{avg_ms:.0f} ms</span></div>',
         f'<div class="mission-stat">Mean cloud <span class="val">{avg_cloud:.0%}</span></div>',
         f'<div class="mission-stat">Compression ratio <span class="val">{f"{comp_ratio:,}:1" if comp_ratio else "n/a"}</span></div>',
     ]
-    # A blank/whitespace-only line inside this block (acc_stat=="" when the
-    # accuracy artifact is missing) makes Markdown treat the indented HTML
-    # after it as a code block instead of passing it through, so it renders
-    # as literal tags. Join without empty entries rather than interpolating
-    # acc_stat on its own line.
+    # Joined rather than interpolated into an indented HTML block: a
+    # whitespace-only line in one of those makes Markdown treat everything
+    # after it as a code block and render the tags literally.
     strip_html = "<div class='mission-strip'>" + "".join(t for t in tiles if t) + "</div>"
     st.markdown(strip_html, unsafe_allow_html=True)
 
