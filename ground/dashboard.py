@@ -27,7 +27,19 @@ Features:
 import json
 import datetime as _dt
 import os
+import sys
 from pathlib import Path
+
+# Streamlit Community Cloud runs this file directly and puts *this* directory on
+# sys.path, not the repository root, and it installs a requirements file rather
+# than running `pip install -e .`. So `ground.` / `orbital.` / `agent.` do not
+# resolve there the way they do in a local dev install. The container images set
+# PYTHONPATH=/app for the same reason; hosted Streamlit gives no equivalent hook,
+# so the entrypoint puts the root on the path itself. This is the deployment
+# entrypoint only: library modules must not grow their own copy of this.
+_ROOT = str(Path(__file__).resolve().parents[1])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 import streamlit as st
 
