@@ -1717,19 +1717,22 @@ def main():
             f'<span class="sub">{acc.get("tiles", "?"):,} held-out tiles</span></div>'
         )
 
-    st.markdown(
-        f"""
-        <div class="mission-strip">
-            <div class="mission-stat">Queue state <span class="val" style="color:{status_color}">{status_text}</span></div>
-            <div class="mission-stat">Briefs in queue <span class="val">{n_briefs}</span></div>
-            <div class="mission-stat">Detections <span class="val">{total_anomalies}</span></div>
-            {acc_stat}
-            <div class="mission-stat">Mean inference <span class="val">{avg_ms:.0f} ms</span></div>
-            <div class="mission-stat">Mean cloud <span class="val">{avg_cloud:.0%}</span></div>
-            <div class="mission-stat">Compression ratio <span class="val">{f'{comp_ratio:,}:1' if comp_ratio else 'n/a'}</span></div>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    tiles = [
+        f'<div class="mission-stat">Queue state <span class="val" style="color:{status_color}">{status_text}</span></div>',
+        f'<div class="mission-stat">Briefs in queue <span class="val">{n_briefs}</span></div>',
+        f'<div class="mission-stat">Detections <span class="val">{total_anomalies}</span></div>',
+        acc_stat,
+        f'<div class="mission-stat">Mean inference <span class="val">{avg_ms:.0f} ms</span></div>',
+        f'<div class="mission-stat">Mean cloud <span class="val">{avg_cloud:.0%}</span></div>',
+        f'<div class="mission-stat">Compression ratio <span class="val">{f"{comp_ratio:,}:1" if comp_ratio else "n/a"}</span></div>',
+    ]
+    # A blank/whitespace-only line inside this block (acc_stat=="" when the
+    # accuracy artifact is missing) makes Markdown treat the indented HTML
+    # after it as a code block instead of passing it through, so it renders
+    # as literal tags. Join without empty entries rather than interpolating
+    # acc_stat on its own line.
+    strip_html = "<div class='mission-strip'>" + "".join(t for t in tiles if t) + "</div>"
+    st.markdown(strip_html, unsafe_allow_html=True)
 
     # ── Provenance ────────────────────────────────────────────────────────────
     # Stated up front, because a dashboard that mixes measured, simulated and

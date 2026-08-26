@@ -49,7 +49,12 @@ osp_dataset_*/
 runs/
 
 # --- Model Artifacts (regenerate with satellite_export.py) ---
-model/artifacts/
+model/artifacts/*
+# Small committed exceptions: the hosted dashboard reads these two summary
+# JSONs directly and has no build step to regenerate them from the (correctly
+# gitignored) multi-GB weights and validation split.
+!model/artifacts/accuracy_int8.json
+!model/artifacts/rate_distortion.json
 yolov8n_6ch.pt
 yolov8n.pt
 
