@@ -152,6 +152,18 @@ st.markdown(f"""
         transition: all 0.3s ease;
         box-shadow: inset 0 0 10px rgba(255,255,255,0.02);
     }}
+    /* Queue cards sit in independent per-column stacks, so a card that carries
+       two detections pushes everything below it out of line with its
+       neighbours. A floor sized for the tallest common card (two detections)
+       makes the grid read as a grid.
+       ponytail: fixed floor, not measured from the corpus. A brief with three
+       or more detections still grows past it; size it from the corpus max if a
+       denser sensor ever makes that the common case. */
+    .brief-card {{
+        min-height: 232px;
+        display: flex;
+        flex-direction: column;
+    }}
     .glass-panel:hover {{
         border: 1px solid rgba(255, 255, 255, 0.15);
         box-shadow: inset 0 0 10px rgba(255,255,255,0.05), 0 4px 20px rgba(0,0,0,0.5);
@@ -508,9 +520,6 @@ def conf_color(conf: float) -> str:
             return color
     return "#8b8b8b"
 
-#: Brief cards rendered alongside the map, before the queue goes full width.
-#: Four is roughly the map's own height, so the two-column band ends level
-#: instead of leaving one side empty for several screens.
 # The queue is one full-width grid under the map. QUEUE_SHOWN is two rows at
 # QUEUE_COLUMNS across: enough to show the corpus's variety (multi-detection
 # tiles, a low-confidence one, and an empty sector) before the expander.
@@ -548,7 +557,7 @@ def render_brief_card(payload: dict) -> None:
         )
 
     st.markdown(
-        f"""<div class="glass-panel">
+        f"""<div class="glass-panel brief-card">
 <h4 class="feed-title">{scene_id}</h4>
 <div class="feed-timestamp">ORBITAL TIMESTAMP: {ts} UTC</div>
 {cards_html}
@@ -1385,6 +1394,184 @@ def render_rate_distortion_explorer() -> None:
     )
 
 
+# ── Wire format ───────────────────────────────────────────────────────────────
+#
+# The brief is the thing the whole project exists to send, and until now the
+# page never showed one. architecture.md section 2 derives the format byte by
+# byte; this panel is that derivation made checkable, including the part that
+# does not flatter the design.
+#
+# Nothing here is typed. The sizes are measured from the committed corpus at
+# render time, and the degraded round-trip is executed live, because a claim
+# about a format that is asserted in prose is exactly the kind of number this
+# project has already watched go stale once.
+
+#: The documented layout of one brief, from `osp.proto` and architecture.md §2.
+#: Sizes include each field's tag byte. The total is checked against a live
+#: serialisation below rather than trusted.
+BYTE_LAYOUT_SCENE = "P0019_00000_01920"
+BYTE_LAYOUT = [
+    ("scene_id",          "LEN, 17 chars", 19, "the tile, by grid position"),
+    ("timestamp_utc",     "LEN, 24 chars", 26, "when it was captured"),
+    ("tile_footprint",    "4 x float64",   38, "the patch of Earth it covers"),
+    ("cloud_cover",       "float32",        5, "how much of it was usable"),
+    ("anomalies[0]",      "sub-message",   37, "one detection: class, lat/lon, conf, box"),
+    ("inference_ms",      "float32",        5, "what it cost to produce"),
+    ("model_version",     "LEN, 19 chars", 21, "which model said so"),
+    ("compression_ratio", "varint",         3, "what it saved"),
+]
+
+
+@st.cache_data(show_spinner=False)
+def wire_format_stats() -> dict:
+    """
+    Measure the committed corpus both ways: protobuf, and the minified JSON the
+    pipeline actually moves.
+
+    `provenance` is excluded from the JSON price, matching
+    `tools/generate_briefs.py:387` and `compute_mission_plan` above: that block
+    is documentation for a reader, not something a spacecraft transmits. Pricing
+    it would inflate the JSON side and flatter protobuf by ~2.6x.
+    """
+    from inference.engine import OSPPayload, Anomaly
+    from inference.serialization_utils import (
+        serialize_to_binary, deserialize_from_binary,
+    )
+
+    def _payload(b: dict) -> "OSPPayload":
+        return OSPPayload(
+            scene_id=b["scene_id"], timestamp_utc=b["timestamp_utc"],
+            tile_footprint=b["tile_footprint"], cloud_cover=b["cloud_cover"],
+            anomalies=[Anomaly(a["type"], *a["lat_lon"], a["conf"], a["bbox_px"])
+                       for a in b["anomalies"]],
+            inference_ms=b["meta"]["inference_ms"],
+            model_version=b["meta"]["model_version"],
+            compression_ratio=b["meta"]["compression_ratio"],
+        )
+
+    files = sorted(BRIEFS_DIR.glob("P*.json"))
+    proto, js, one = [], [], None
+    for f in files:
+        b = json.loads(f.read_text())
+        n = len(serialize_to_binary(_payload(b)))
+        proto.append(n)
+        js.append(len(json.dumps({k: v for k, v in b.items() if k != "provenance"},
+                                 separators=(",", ":")).encode()))
+        if b["scene_id"] == BYTE_LAYOUT_SCENE:
+            one = n
+
+    # The gap that matters, executed rather than asserted: a brief that failed
+    # perception carries `degraded` on the JSON path the pipeline uses, and
+    # `osp.proto` has no such field, so the flag does not survive the format the
+    # 154-byte figure is measured in.
+    probe = _payload(json.loads((BRIEFS_DIR / f"{BYTE_LAYOUT_SCENE}.json").read_text()))
+    probe.degraded, probe.fault = True, "RuntimeError: simulated"
+    probe.fallback_action = "hold_last_known_good_and_flag_ground"
+    recovered = deserialize_from_binary(serialize_to_binary(probe))
+
+    return {
+        "n": len(files),
+        "proto_mean": sum(proto) / len(proto), "proto_total": sum(proto),
+        "json_mean": sum(js) / len(js), "json_total": sum(js),
+        "proto_min": min(proto), "proto_max": max(proto),
+        "layout_bytes": one,
+        "degraded_in": True,
+        "degraded_out": bool(getattr(recovered, "degraded", False)),
+        "fault_out": getattr(recovered, "fault", None),
+    }
+
+
+def render_wire_format_panel() -> None:
+    """The brief itself: what a spacecraft actually says, byte by byte."""
+    st.markdown("### THE BRIEF ON THE WIRE")
+    st.caption(
+        "Everything else on this page is about what to send. This is the thing "
+        "being sent. Sizes are measured from the committed corpus at render "
+        "time, not quoted."
+    )
+
+    try:
+        w = wire_format_stats()
+    except Exception as e:
+        st.info(
+            f"Wire-format measurement unavailable in this environment ({type(e).__name__}). "
+            "The derivation is in architecture.md section 2."
+        )
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Protobuf", f"{w['proto_mean']:.1f} B")
+    c1.caption(f"mean over {w['n']} briefs ({w['proto_min']}-{w['proto_max']} B)")
+    c2.metric("Minified JSON", f"{w['json_mean']:.1f} B")
+    c2.caption("what the pipeline actually moves today")
+    c3.metric("Ratio", f"{w['json_mean'] / w['proto_mean']:.2f}x")
+    c3.caption(f"{w['proto_total']:,} B vs {w['json_total']:,} B for the corpus")
+
+    import pandas as pd
+
+    st.markdown(f"**One brief, field by field** · `{BYTE_LAYOUT_SCENE}`")
+    st.dataframe(
+        pd.DataFrame([
+            {"Field": f, "Encoding": e, "Bytes": n, "Answers": why}
+            for f, e, n, why in BYTE_LAYOUT
+        ]),
+        width="stretch", hide_index=True,
+        column_config={
+            "Field":    st.column_config.TextColumn(width="medium"),
+            "Encoding": st.column_config.TextColumn(width="small"),
+            "Bytes":    st.column_config.NumberColumn(width="small"),
+            "Answers":  st.column_config.TextColumn(width="large"),
+        },
+    )
+
+    declared = sum(n for _, _, n, _ in BYTE_LAYOUT)
+    if w["layout_bytes"] == declared:
+        st.caption(
+            f"**{declared} B total**, and this brief serialises to "
+            f"{w['layout_bytes']} B right now, so the table is checked rather "
+            "than trusted. The envelope is about 117 B and one detection costs "
+            "about 37, which is the right shape when most tiles are empty ocean "
+            "and the interesting ones are not much bigger. A class is a two-byte "
+            "enum here; JSON spends fifteen characters on the word `harbor`."
+        )
+    else:
+        st.warning(
+            f"The documented layout sums to {declared} B but this brief "
+            f"serialises to {w['layout_bytes']} B. The table has drifted from "
+            "the schema and one of them is wrong."
+        )
+
+    st.divider()
+
+    st.markdown("**The gap this format has, demonstrated rather than described**")
+    g1, g2 = st.columns(2)
+    g1.metric("`degraded` before encoding", str(w["degraded_in"]))
+    g2.metric("`degraded` after round-trip", str(w["degraded_out"]),
+              delta="flag lost" if not w["degraded_out"] else None,
+              delta_color="inverse")
+    st.caption(
+        "A brief whose perception path failed carries `degraded`, a "
+        "`fallback_action` and the `fault` that caused it. `osp.proto` declares "
+        "none of the three, so a degraded brief round-tripped through the "
+        "declared wire format arrives on the ground indistinguishable from a "
+        "healthy observation. The fault-tolerance story on the next tab rests "
+        "on that flag being unmistakable, and it is unmistakable on the JSON "
+        "path, which is what the engine writes and what the scheduler ingests. "
+        "It is silently dropped by the format the 154-byte figure is measured in. "
+        "Fixing it is a versioned schema change alongside `sint32` bounding "
+        "boxes and a CRC-32 over the message, and it has not been done."
+    )
+    st.caption(
+        f"Which is why the {w['json_mean']:.0f} B JSON column above is the honest "
+        f"one: `serialize_to_binary` appears nowhere outside its own module and "
+        "the round-trip tests. The engine writes JSON, the scheduler prices JSON, "
+        "and the rate-distortion result on the first tab is charged that larger "
+        "number, so the architectural argument never spends the protobuf figure. "
+        "The wire format is designed, tested and measured. It is not yet the "
+        "transport, and saying so costs less than being caught."
+    )
+
+
 def render_resilience_panel() -> None:
     """Failure modes, declared responses, and the measured degradation curve."""
     st.markdown("### FAULT INJECTION")
@@ -1829,19 +2016,21 @@ def main():
             height=height,
         )
 
-    tab1, tab2 = st.tabs(["GROUND TRACK 2D", "ORBIT VIEW 3D"])
+    # 3D first: it is the view that reads as a spacecraft rather than as a GIS
+    # layer, and Streamlit opens on the first tab.
+    tab1, tab2 = st.tabs(["ORBIT VIEW 3D", "GROUND TRACK 2D"])
 
     with tab1:
-        st.markdown("### SCENE COVERAGE AND GROUND TRACK")
+        st.markdown("### ORBIT AND CONTACT GEOMETRY")
         st.plotly_chart(
-            _scene_figure("equirectangular", "Scene coverage and ground track", 560),
+            _scene_figure("orthographic", None, 700),
             width="stretch",
         )
 
     with tab2:
-        st.markdown("### ORBIT AND CONTACT GEOMETRY")
+        st.markdown("### SCENE COVERAGE AND GROUND TRACK")
         st.plotly_chart(
-            _scene_figure("orthographic", None, 700),
+            _scene_figure("equirectangular", "Scene coverage and ground track", 560),
             width="stretch",
         )
 
@@ -1883,10 +2072,14 @@ def main():
     # which billed the project's two strongest results as footnotes.
     st.divider()
     st.markdown("### EVIDENCE")
-    ev1, ev2 = st.tabs(["RATE-DISTORTION", "RADIATION TOLERANCE"])
+    ev1, ev2, ev3 = st.tabs(
+        ["RATE-DISTORTION", "WIRE FORMAT", "RADIATION TOLERANCE"]
+    )
     with ev1:
         render_rate_distortion_explorer()
     with ev2:
+        render_wire_format_panel()
+    with ev3:
         render_resilience_panel()
 
     # ── OVV command ────────────────────────────────────────────────────────────

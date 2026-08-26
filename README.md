@@ -26,6 +26,8 @@ There is no patience strategy and no better compression of pixels that closes a 
 
 That 1.95 MB is computed, not assumed. `orbital/` runs a committed CelesTrak TLE snapshot through SGP4, hand-written frame conversions, real ground stations, and a bisection-refined contact scheduler. The frame conversions are checked against Skyfield (test-only, never imported at runtime) over 24 hours: worst case **38.5 m** in slant range, 0.0003° in elevation. The profile constant this project started with guessed 5.0 contact minutes; the propagated geometry says 10.155. Both numbers are still in the repo, labelled, because the guess being wrong by 2x is the point.
 
+The dashboard's ground track is the same propagation, not an illustration. It used to be a circle at the wrong inclination, rotated by a fixed offset so it would cross the demo scene: three separate fictions stacked to make the picture come out right. There is now deliberately no synthetic fallback, so if the orbital layer is unavailable the globe draws no track at all, on the grounds that a plausible-looking fake orbit next to real detections is worse than an empty globe.
+
 Full derivation of the division above, and of the wire format it forces, in [architecture.md §1–2](architecture.md).
 
 ---
@@ -52,6 +54,8 @@ The language model narrates the outcome and cannot change it. This is enforced s
 - `DownlinkScheduler.plan()` takes no model hook. The resulting `DownlinkPlan` is frozen before the model ever sees it.
 
 Three tests hold the line: one **fails if a model hook is ever added to the scheduler's signature**, one proves the plan is byte-identical regardless of run order, one proves narration cannot mutate the plan. The first of those is the one worth reading, because it makes the boundary a property of the type signature rather than a convention someone remembers to follow.
+
+What the model layer actually is, so its size is not left to the imagination: retrieval is a dot product against a 14-chunk corpus of domain notes, and episodic memory is a SQLite table of past detections by location so an analysis can say what changed since the last pass. No vector database, no fine-tune. Both are deliberately small, because the argument this project makes does not route through them.
 
 The boundary is softer in exactly one place and [architecture.md §6](architecture.md) names it: `_decide_ovv` accepts a model-authored proposal into an action list, tagged `source="llm"`, where it can outbid a policy request for the last of three slots. It never reaches the scheduler and never changes an alert level. That edge case, and the one-line fix for it, are documented rather than hidden.
 
