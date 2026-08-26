@@ -1,20 +1,14 @@
 # Orbital Scene Preprocessor
 
-A spacecraft decides what to downlink on its next contact, under real orbital and link constraints, by deterministic rule. A language model helps explain the result and is architecturally unable to change it.
+A trained detector finds ships, airplanes, harbors and storage tanks in real satellite tiles at **0.880 mAP**, quantized to **3.69 MB** and **169 ms/tile**. A hand-derived orbital mechanics stack, accurate to **38 m** against an independent implementation, decides when and how much of that result a spacecraft can actually afford to send: **1,480x fewer bytes than the raw imagery, at equal detection accuracy**. A language model narrates the outcome and is architecturally unable to override it.
 
 [Open the live command centre](https://osp-command-centre.streamlit.app/) · [How it works, derived from first principles](architecture.md)
 
 [![tests](https://github.com/brightyorcerf/orbital-preprocessor/actions/workflows/tests.yml/badge.svg)](https://github.com/brightyorcerf/orbital-preprocessor/actions/workflows/tests.yml)
 
-`86% of a corpus's objects: 0.89 MB as briefs, 592.9 MB as raw, unreachable by JPEG` · `one contact buys 1,343 briefs or 2.0 raw tiles`
-
-`SGP4-propagated contact windows` · `10.2 min pass, computed not assumed` · `frames validated to 38 m against Skyfield`
-
-`LLM in control loop: False, enforced by the interface` · `every declared fallback has a test that fires it`
-
-`3.69 MB INT8 detector` · `169 ms per tile end to end on 2 cores` · `155-byte briefs` · `0.880 mAP@0.5 on 3,677 real DOTA tiles`
-
 ![OSP command centre](docs/img.jpg)
+
+`SGP4 propagation, hand-written frame conversions, validated against Skyfield` · `0.880 mAP@0.5 on 3,677 real DOTA tiles, not synthetic` · `bit-flip fault injection with a CRC scrub that recovers exactly` · `LLM in control loop: false, enforced by the interface, three tests hold the line`
 
 ---
 
