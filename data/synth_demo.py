@@ -1,5 +1,5 @@
 """
-data/synth_demo.py   (also importable as ground/synth_demo.py via a re-export shim)
+data/synth_demo.py
 ──────────────────────────────────────────────────────────────────────────
 Generates a synthetic OSP training dataset from scratch.
 
@@ -48,12 +48,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).parent.parent
-if str(_ROOT) not in _sys.path:
-    _sys.path.insert(0, str(_ROOT))
 
 from data.synthetic_bands import rgb_to_6band
 

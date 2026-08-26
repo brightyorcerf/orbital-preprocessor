@@ -4,6 +4,11 @@
 **/*_pb2.py
 **/*_pb2_grpc.py
 
+# --- Packaging (pip install -e .) ---
+*.egg-info/
+build/
+dist/
+
 # --- Python Environment ---
 .venv/
 venv/
@@ -43,9 +48,8 @@ osp_dataset_*/
 # --- Training Runs (Ultralytics output) ---
 runs/
 
-# --- Model Artifacts (generated, not committed) ---
-model/artifacts/*.onnx
-model/artifacts/*.pt
+# --- Model Artifacts (regenerate with satellite_export.py) ---
+model/artifacts/
 yolov8n_6ch.pt
 yolov8n.pt
 
@@ -56,26 +60,15 @@ yolov8n.pt
 # Uncommenting this will require running compile_proto.sh on every clone:
 # inference/osp_pb2.py
 
-# --- RAG Vector Store (auto-generated at runtime, do not commit) ---
-rag/vector_store/
-
 # --- Scene Memory DB (runtime state, do not commit) ---
 ground/osp_memory.db
 
 # --- Misc ---
 globe.html
 *.npy
-!data/__init__.py
 !ground/__init__.py
 !model/__init__.py
 !inference/__init__.py
-# Model artifacts (regenerate with satellite_export.py)
-model/artifacts/
-*.onnx
-yolov8n.pt
-
-# Local venv
-.venv/
 *.data
 
 # Real DOTA artifacts pulled down from the Kaggle training run.

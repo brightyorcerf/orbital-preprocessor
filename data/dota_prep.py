@@ -61,15 +61,10 @@ import argparse
 import json
 import logging
 import random
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
-
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 log = logging.getLogger(__name__)
 

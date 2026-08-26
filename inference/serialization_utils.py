@@ -70,24 +70,25 @@ except ImportError as e:
 
 # ── String ↔ AnomalyType enum mapping ────────────────────────────────────────
 
-_STR_TO_ENUM: dict[str, int] = {
-    "ship":         AnomalyType.SHIP,
-    "airplane":     AnomalyType.AIRPLANE,
-    "storage-tank": AnomalyType.STORAGE_TANK,
-    "harbor":       AnomalyType.HARBOR,
-}
-
-_ENUM_TO_STR: dict[int, str] = {v: k for k, v in _STR_TO_ENUM.items()}
-
+# Protobuf generates Name()/Value() for every enum, so the only thing left to
+# state is the spelling difference: OSP class names are lowercase and
+# hyphenated ("storage-tank"), proto enum names are upper snake case
+# (STORAGE_TANK). Two hand-maintained dicts used to encode that one rule.
 
 def str_to_anomaly_type(name: str) -> int:
     """Convert class name string → AnomalyType enum int. Unknown → UNKNOWN(0)."""
-    return _STR_TO_ENUM.get(name.lower().strip(), AnomalyType.UNKNOWN)
+    try:
+        return AnomalyType.Value(name.strip().upper().replace("-", "_"))
+    except ValueError:
+        return AnomalyType.UNKNOWN
 
 
 def anomaly_type_to_str(enum_val: int) -> str:
     """Convert AnomalyType enum int → class name string."""
-    return _ENUM_TO_STR.get(enum_val, "unknown")
+    try:
+        return AnomalyType.Name(enum_val).lower().replace("_", "-")
+    except ValueError:
+        return "unknown"
 
 
 # ── OSPPayload → SceneBrief (proto) ──────────────────────────────────────────
@@ -227,37 +228,14 @@ def payload_to_json(payload) -> str:
 
 def _proto_to_json_str(brief: SceneBrief) -> str:
     """
-    Convert SceneBrief proto → compact JSON dict.
-    Mirrors engine.OSPPayload.to_json() schema exactly so the dashboard
-    doesn't need two JSON parsers.
+    Convert SceneBrief proto → compact JSON string.
+
+    Reconstructs the dataclass and lets it serialise itself. This used to be a
+    second hand-written copy of `engine.OSPPayload.to_json`'s schema, with a
+    docstring promising it "mirrors it exactly" — a promise nothing enforced,
+    over two field lists that had to be edited in lockstep forever.
     """
-    d = {
-        "scene_id":      brief.scene_id,
-        "timestamp_utc": brief.timestamp_utc,
-        "tile_footprint": {
-            "lat_min": brief.tile_footprint.lat_min,
-            "lat_max": brief.tile_footprint.lat_max,
-            "lon_min": brief.tile_footprint.lon_min,
-            "lon_max": brief.tile_footprint.lon_max,
-        },
-        "cloud_cover":   round(brief.cloud_cover, 3),
-        "anomaly_count": len(brief.anomalies),
-        "anomalies": [
-            {
-                "type":    anomaly_type_to_str(a.type),
-                "lat_lon": [round(a.lat, 6), round(a.lon, 6)],
-                "conf":    round(a.confidence, 4),
-                "bbox_px": list(a.bbox_px),
-            }
-            for a in brief.anomalies
-        ],
-        "meta": {
-            "model_version":    brief.model_version,
-            "inference_ms":     round(brief.inference_ms, 1),
-            "compression_ratio": brief.compression_ratio,
-        },
-    }
-    return json.dumps(d, separators=(",", ":"))
+    return proto_to_payload(brief).to_json()
 
 
 # ── Compression report ────────────────────────────────────────────────────────
@@ -368,60 +346,3 @@ def get_compression_report(payload) -> CompressionReport:
     )
 
     return report
-
-
-# ── CLI demo ──────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    """
-    Demo: build a mock OSPPayload, serialize both ways, print report.
-    Does NOT require a trained model or ONNX runtime.
-    """
-    try:
-        from .engine import Anomaly as EngineAnomaly, OSPPayload
-    except ImportError:
-        from inference.engine import Anomaly as EngineAnomaly, OSPPayload
-
-    mock_payload = OSPPayload(
-        scene_id      = "OSP-DEMO-01",
-        timestamp_utc = "2026-04-24T09:12:44Z",
-        tile_footprint = {"lat_min": 8.0, "lat_max": 9.0,
-                          "lon_min": 77.0, "lon_max": 78.0},
-        cloud_cover    = 0.08,
-        anomalies=[
-            EngineAnomaly("ship",    lat=8.412, lon=77.821, conf=0.87,
-                          bbox_px=[320, 210, 380, 250]),
-            EngineAnomaly("ship",    lat=8.388, lon=77.795, conf=0.79,
-                          bbox_px=[280, 300, 340, 330]),
-            EngineAnomaly("harbor",  lat=8.501, lon=77.901, conf=0.92,
-                          bbox_px=[450, 140, 560, 220]),
-        ],
-        inference_ms      = 312.4,
-        model_version     = "osp-yolov8n-int8-v1",
-    )
-    # Computed the same way `_finalise` does, against the measured CCSDS
-    # price rather than a hand-typed figure — a fixed demo number is exactly
-    # how the 85,000:1 constant went stale in the first place.
-    mock_payload.compression_ratio = max(
-        1, RAW_TILE_BYTES_CCSDS // len(mock_payload.to_json().encode())
-    )
-
-    # Serialize
-    binary   = serialize_to_binary(mock_payload)
-    json_str = payload_to_json(mock_payload)
-
-    print(f"Proto binary : {binary.hex()[:64]}...")
-    print(f"JSON snippet : {json_str[:120]}...")
-
-    # Round-trip verification
-    recovered = deserialize_from_binary(binary)
-    assert recovered.scene_id == mock_payload.scene_id
-    assert len(recovered.anomalies) == len(mock_payload.anomalies)
-    assert abs(recovered.anomalies[0].conf - 0.87) < 1e-4
-    assert recovered.anomalies[0].type == "ship"
-    assert list(recovered.anomalies[0].bbox_px) == [320, 210, 380, 250]
-    print("\n✓ Round-trip: binary → OSPPayload → verified\n")
-
-    # Compression report
-    report = get_compression_report(mock_payload)
-    print(report)

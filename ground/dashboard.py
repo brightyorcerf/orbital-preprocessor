@@ -27,20 +27,11 @@ Features:
 import json
 import datetime as _dt
 import os
-import sys
 from pathlib import Path
 
-root_dir = str(Path(__file__).parent.parent)
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
-
-import folium
 import streamlit as st
-from streamlit_folium import st_folium
 
 from ground.globe import build_globe
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── GenAI module imports (graceful fallback if deps missing) ──────────────────
 try:
@@ -450,14 +441,6 @@ st.markdown(f"""
     }}
 
     /* ORION elements */
-    .orion-brief {{
-        background: rgba(8,8,8,0.7);
-        border-radius: 6px;
-        padding: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        font-family: 'Inter', sans-serif;
-        font-size: 13px;
-    }}
     .reasoning-step {{
         background: rgba(12, 12, 12, 0.5);
         border-left: 2px solid #8b8b8b;
@@ -584,83 +567,17 @@ def load_payloads_from_dir(directory: str) -> list[dict]:
             pass
     return payloads
 
-def build_folium_map(payloads: list[dict]) -> folium.Map:
-    # Centre on mean of all tile footprints
-    all_lats = []
-    all_lons = []
+
+def footprint_centre(payloads: list[dict]) -> tuple[float, float]:
+    """Mean centre of every tile footprint, for the map's initial view."""
+    lats, lons = [], []
     for p in payloads:
         fp = p.get("tile_footprint", {})
-        all_lats += [fp.get("lat_min", 0), fp.get("lat_max", 0)]
-        all_lons += [fp.get("lon_min", 0), fp.get("lon_max", 0)]
+        lats += [fp.get("lat_min", 0), fp.get("lat_max", 0)]
+        lons += [fp.get("lon_min", 0), fp.get("lon_max", 0)]
+    return (sum(lats) / len(lats) if lats else 8.5,
+            sum(lons) / len(lons) if lons else 77.5)
 
-    centre_lat = sum(all_lats) / len(all_lats) if all_lats else 8.5
-    centre_lon = sum(all_lons) / len(all_lons) if all_lons else 77.5
-
-    m = folium.Map(
-        location=[centre_lat, centre_lon],
-        zoom_start=8,
-        tiles="CartoDB dark_matter",
-        control_scale=True,
-        # The map sits mid-page, so wheel-zoom would swallow the page scroll
-        # every time the cursor crossed it and read as a broken page. Zoom
-        # stays available through the +/- control and double-click.
-        scrollWheelZoom=False,
-    )
-
-    for payload in payloads:
-        fp       = payload.get("tile_footprint", {})
-        scene_id = payload.get("scene_id", "?")
-        cloud    = payload.get("cloud_cover", 0)
-        anomalies = payload.get("anomalies", [])
-
-        # ── Tile footprint polygon ─────────────────────────────────────────
-        if all(k in fp for k in ["lat_min", "lat_max", "lon_min", "lon_max"]):
-            bounds = [
-                [fp["lat_min"], fp["lon_min"]],
-                [fp["lat_min"], fp["lon_max"]],
-                [fp["lat_max"], fp["lon_max"]],
-                [fp["lat_max"], fp["lon_min"]],
-            ]
-            folium.Polygon(
-                locations=bounds,
-                color="#8b8b8b",
-                weight=1.5,
-                fill=True,
-                fill_color="#8b8b8b",
-                fill_opacity=0.05,
-                tooltip=f"{scene_id} | CLOUD {cloud:.0%}",
-            ).add_to(m)
-
-        # ── Anomaly pins ───────────────────────────────────────────────────
-        for a in anomalies:
-            lat, lon = a.get("lat_lon", [centre_lat, centre_lon])
-            cls_name = a.get("type", "unknown")
-            conf     = a.get("conf", 0)
-            color    = conf_color(conf)
-
-            popup_html = f"""
-            <div style="font-family:monospace;font-size:12px;min-width:180px;color:#f5f5f5;background:#050505;">
-                <b style="text-transform:uppercase;">{cls_name}</b><br>
-                SCENE: {scene_id}<br>
-                CONF:  <b style="color:{color}">{conf:.0%}</b><br>
-                LAT:   {lat:.5f}°<br>
-                LON:   {lon:.5f}°<br>
-            </div>
-            """
-
-            folium.CircleMarker(
-                location=[lat, lon],
-                radius=10 + int(conf * 8),
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.7,
-                popup=folium.Popup(popup_html, max_width=220),
-                tooltip=f"{cls_name} ({conf:.0%})",
-            ).add_to(m)
-
-    folium.LayerControl().add_to(m)
-    return m
 
 # ── Committed brief corpus ────────────────────────────────────────────────────
 #
@@ -1658,7 +1575,6 @@ def main():
         st.divider()
         st.markdown("### ORION AGENT")
         run_llm   = st.toggle("Enable LLM analysis", value=False)
-        llm_provider = st.selectbox("Provider", ["gemini", "anthropic", "openai"])
         api_key_input = st.text_input(
             "API Key (or env var)",
             type="password",
@@ -1847,35 +1763,47 @@ def main():
     map_col, data_col = st.columns([3, 2])
 
     with map_col:
-        tab1, tab2 = st.tabs(["GROUND TRACK 2D", "ORBIT VIEW 3D"])
-        
-        with tab1:
-            st.markdown("### SCENE COVERAGE AND GROUND TRACK")
-            fmap = build_folium_map(payloads)
-            st_data = st_folium(fmap, width=700, height=500, returned_objects=["last_object_clicked"], use_container_width=True)
-            
-        with tab2:
-            st.markdown("### ORBIT AND CONTACT GEOMETRY")
-            center_lat, center_lon = 8.5, 77.5
-            if st_data and st_data.get("last_object_clicked"):
-                center_lat = st_data["last_object_clicked"]["lat"]
-                center_lon = st_data["last_object_clicked"]["lng"]
-            _station_obj = None
-            if orbital_ready:
-                try:
-                    from orbital.stations import get_station as _gs
-                    _station_obj = _gs(station_choice)
-                except Exception:
-                    _station_obj = None
-            fig = build_globe(
+        # Both tabs are the same figure builder under two projections. The 2D
+        # view used to be a separate folium map, which meant the footprints and
+        # pins were drawn twice from two code paths and could disagree — and it
+        # could not show the ground track that its own tab was named after.
+        center_lat, center_lon = footprint_centre(payloads)
+        _station_obj = None
+        if orbital_ready:
+            try:
+                from orbital.stations import get_station as _gs
+                _station_obj = _gs(station_choice)
+            except Exception:
+                _station_obj = None
+
+        def _scene_figure(projection: str, title: str, height: int):
+            return build_globe(
                 payloads,
                 show_orbit=True,
                 center_lat=center_lat,
                 center_lon=center_lon,
                 satellite=sat_choice if orbital_ready else None,
                 station=_station_obj,
+                projection=projection,
+                title=title,
+                height=height,
             )
-            st.plotly_chart(fig, width="stretch")
+
+        tab1, tab2 = st.tabs(["GROUND TRACK 2D", "ORBIT VIEW 3D"])
+
+        with tab1:
+            st.markdown("### SCENE COVERAGE AND GROUND TRACK")
+            st.plotly_chart(
+                _scene_figure("equirectangular", "Scene coverage and ground track", 520),
+                width="stretch",
+            )
+
+        with tab2:
+            st.markdown("### ORBIT AND CONTACT GEOMETRY")
+            st.plotly_chart(
+                _scene_figure("orthographic", None, 700),
+                width="stretch",
+            )
 
     # The queue used to run the full corpus down this narrow column while the
     # map column held a fixed-height map, so roughly 40% of the page's scroll
@@ -1944,13 +1872,9 @@ def main():
         for i, payload in enumerate(payloads[:3]):   # Cap at 3 to save API quota
             with st.spinner(f"Analysing {payload.get('scene_id', i+1)} ..."):
                 try:
-                    sys.path.insert(0, str(Path(__file__).parent))
                     from ground.llm_analyst import OrbitalAnalyst
 
-                    analyst = OrbitalAnalyst(
-                        provider=llm_provider,
-                        api_key=key or None,
-                    )
+                    analyst = OrbitalAnalyst(api_key=key or None)
                     brief   = analyst.analyse(json.dumps(payload))
                     level   = brief.get("alert_level", "UNKNOWN")
                     color   = analyst.alert_color(brief)
@@ -2020,7 +1944,7 @@ def main():
                 unsafe_allow_html=True,
             )
         else:
-            st.warning("Agent deps missing. Run: pip install faiss-cpu sentence-transformers")
+            st.warning("Agent deps missing. Run: pip install sentence-transformers")
 
     if run_agent and _AGENT_AVAILABLE and payloads:
         agent_key = api_key_input or os.environ.get("GEMINI_API_KEY", "")
@@ -2031,7 +1955,6 @@ def main():
             with st.spinner("Running ORION Mission Cycle (RAG → Memory → Reason → Decide) ..."):
                 try:
                     agent = MissionController(
-                        provider=llm_provider,
                         api_key=agent_key,
                         use_rag=True,
                         use_memory=True,

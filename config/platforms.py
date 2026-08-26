@@ -31,7 +31,7 @@ with real numbers, not as a claim about Skyroot hardware.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -48,8 +48,6 @@ class Provenance(str, Enum):
 class ComputeBudget:
     """On-board compute envelope."""
     accelerator:      str
-    int8_tops:        Optional[float]
-    memory_gb:        float
     cpu_cores:        int
     onnx_providers:   tuple[str, ...]
     provenance:       Provenance
@@ -95,43 +93,34 @@ class AssuranceProfile:
     fallback_on_model_failure:        str
 
 
+# Every field below is read by something. `mission_class`, `int8_tops`,
+# `memory_gb`, a `notes` tuple and a `summary()` renderer used to sit here too;
+# nothing but this file's own demo block ever read them, which made them prose
+# with a type annotation rather than a profile the code is bound by. The prose
+# they carried lives in the per-profile comments, where it cannot go stale
+# against a consumer that does not exist.
+
 @dataclass(frozen=True)
 class PlatformProfile:
     key:            str
     display_name:   str
     operator:       str
-    mission_class:  str
     compute:        ComputeBudget
     link:           LinkBudget
     assurance:      AssuranceProfile
-    notes:          tuple[str, ...] = field(default_factory=tuple)
-
-    def summary(self) -> str:
-        return (
-            f"{self.display_name} ({self.operator})\n"
-            f"  class     : {self.mission_class}\n"
-            f"  compute   : {self.compute.accelerator}, {self.compute.memory_gb}GB, "
-            f"{self.compute.cpu_cores} cores [{self.compute.provenance.value}]\n"
-            f"  link      : {self.link.downlink_kbps}kbps x "
-            f"{self.link.contact_minutes_per_orbit}min/orbit "
-            f"→ {self.link.briefs_per_contact():,} briefs/contact "
-            f"[{self.link.provenance.value}]\n"
-            f"  assurance : LLM in control loop = {self.assurance.llm_in_control_loop}, "
-            f"latency budget {self.assurance.max_inference_latency_ms:.0f}ms"
-        )
 
 
 # ── Profile: MOI-1A (original target) ─────────────────────────────────────────
 
 MOI_1A = PlatformProfile(
+    # Hosted-payload EO smallsat. Original OSP target: GPU-backed, comparatively
+    # generous compute, and a link budget loose enough that ground-side LLM
+    # reasoning is acceptable because the loop is advisory.
     key="moi-1a",
     display_name="MOI-1A / OrbitLab",
     operator="TakeMe2Space",
-    mission_class="hosted-payload EO smallsat",
     compute=ComputeBudget(
-        accelerator="100 TOPS class GPU",
-        int8_tops=100.0,
-        memory_gb=4.0,
+        accelerator="100 TOPS class GPU, 4 GB",
         cpu_cores=2,
         onnx_providers=("CUDAExecutionProvider", "CPUExecutionProvider"),
         provenance=Provenance.PUBLISHED,
@@ -149,29 +138,29 @@ MOI_1A = PlatformProfile(
         max_inference_latency_ms=800.0,
         fallback_on_model_failure="emit_empty_brief_with_cloud_estimate",
     ),
-    notes=(
-        "Original OSP target. GPU-backed, comparatively generous compute.",
-        "Ground-side LLM reasoning is acceptable here — the loop is advisory.",
-    ),
 )
 
 
 # ── Profile: Skyroot OAM class (representative envelope) ──────────────────────
 
 SKYROOT_OAM = PlatformProfile(
+    # Restartable orbital transfer stage / free-flying bus. A DERIVED envelope,
+    # not a Skyroot specification: replace with real avionics numbers before
+    # drawing any conclusion about flight hardware. Post-separation an OAM is a
+    # powered free-flying platform with attitude control, which is the natural
+    # home for a hosted tech-demo payload, and its binding constraint is
+    # assurance rather than FLOPs — every autonomous action must be traceable
+    # to a deterministic rule.
     key="skyroot-oam",
     display_name="Vikram-1 Orbital Adjustment Module (representative)",
     operator="Skyroot Aerospace",
-    mission_class="restartable orbital transfer stage / free-flying bus",
     compute=ComputeBudget(
         # Deliberately an order of magnitude below MOI-1A. Upper-stage avionics
         # are sized for guidance, navigation and control, not for imagery, and
         # rad-tolerant parts lag commercial silicon by several generations.
         # Sizing the profile down is the point: it forces the INT8 work to
         # matter rather than being decorative.
-        accelerator="rad-tolerant SoC, CPU-only inference",
-        int8_tops=None,
-        memory_gb=1.0,
+        accelerator="rad-tolerant SoC, CPU-only inference, 1 GB",
         cpu_cores=2,
         onnx_providers=("CPUExecutionProvider",),
         provenance=Provenance.DERIVED,
@@ -193,14 +182,6 @@ SKYROOT_OAM = PlatformProfile(
         # manoeuvre burns are short, so perception must fit inside one.
         max_inference_latency_ms=400.0,
         fallback_on_model_failure="hold_last_known_good_and_flag_ground",
-    ),
-    notes=(
-        "DERIVED envelope, not a Skyroot specification. Replace with real "
-        "avionics numbers before drawing any conclusion about flight hardware.",
-        "Post-separation, an OAM is a powered free-flying platform with "
-        "attitude control — the natural home for a hosted tech-demo payload.",
-        "The binding constraint here is assurance, not FLOPs: every autonomous "
-        "action must be traceable to a deterministic rule.",
     ),
 )
 
@@ -227,11 +208,3 @@ def get_profile(key: Optional[str] = None) -> PlatformProfile:
             f"Unknown platform profile '{key}'. Available: {sorted(PROFILES)}"
         )
     return PROFILES[key]
-
-
-if __name__ == "__main__":
-    for p in PROFILES.values():
-        print(p.summary())
-        for n in p.notes:
-            print(f"    • {n}")
-        print()

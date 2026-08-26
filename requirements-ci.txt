@@ -3,7 +3,7 @@
 # What the three test suites need, and nothing else.
 #
 # requirements.txt is the documented install path for actually using OSP, and
-# it pulls torch, ultralytics, faiss and streamlit: roughly 2 GB and several
+# it pulls torch, ultralytics and streamlit: roughly 2 GB and several
 # minutes. None of that is reachable from the tests CI runs. Training and
 # export need it; asserting that a contact window is 10.2 minutes long does not.
 #

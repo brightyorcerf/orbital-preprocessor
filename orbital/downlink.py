@@ -404,10 +404,6 @@ class DownlinkPlan:
     generated_utc: str
 
     @property
-    def bytes_remaining(self) -> int:
-        return self.usable_bytes - self.bytes_used
-
-    @property
     def utilisation(self) -> float:
         return self.bytes_used / self.usable_bytes if self.usable_bytes else 0.0
 

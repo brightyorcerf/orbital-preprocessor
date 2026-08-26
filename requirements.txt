@@ -11,7 +11,8 @@ numpy>=1.24,<2.0
 opencv-python>=4.8,<5.0        # cv2 — used in synthetic_bands, preprocess, engine
 
 # ── Deep learning ─────────────────────────────────────────────────────────────
-torch>=2.1,<3.0                # PyTorch — model surgery + dataset loader
+torch>=2.4,<3.0                # PyTorch — model surgery + dataset loader
+                               # 2.4 is the floor for torch.amp.GradScaler("cuda", ...)
 ultralytics>=8.1,<9.0          # YOLOv8 training + export API
 
 # ── ONNX inference (CPU; Dockerfile overrides with onnxruntime-gpu) ──────────
@@ -27,20 +28,24 @@ protobuf>=5.29,<6.0
 
 # ── Ground dashboard ──────────────────────────────────────────────────────────
 streamlit>=1.32,<2.0
-folium>=0.16,<1.0
-streamlit-folium>=0.18,<1.0
 # Imported directly by ground/dashboard.py to render the decision audit trail.
 # Streamlit pulls it in transitively, but a module that imports a package must
 # declare it rather than rely on someone else's dependency staying put.
 pandas>=2.0
+# Both map tabs (2D ground track, 3D globe) are one ground/globe.py figure
+# under two projections. folium and streamlit-folium used to draw the 2D one
+# from a second code path and are gone.
 plotly>=5.20,<7.0          # validated on 6.9; 5.x also works
 
-# ── LLM reasoning layer (ORION analyst — Gemini / OpenAI / Anthropic) ────────
+# ── LLM reasoning layer (ORION analyst) ──────────────────────────────────────
+# Gemini only. The OpenAI-compatible path was absent from every deployment
+# manifest, so nothing anyone runs could reach it.
 google-generativeai>=0.5,<1.0
-openai>=1.20,<2.0              # also covers Anthropic via OpenAI-compat endpoint
 
-# ── GenAI: RAG + Vector Store (rag/ module) ───────────────────────────────────
-faiss-cpu>=1.7,<2.0            # FAISS vector similarity search (CPU build)
+# ── GenAI: RAG (rag/ module) ─────────────────────────────────────────────────
+# No vector database. The corpus is 14 chunks, so retrieval is a dot product
+# against a (14, 384) numpy matrix — which is what a flat inner-product index
+# computes anyway, minus the on-disk index and its staleness checks.
 sentence-transformers>=2.7,<4.0  # Local embedding model (all-MiniLM-L6-v2)
 
 # ── Real data ingestion (optional — only needed for live Sentinel-2 data) ─────

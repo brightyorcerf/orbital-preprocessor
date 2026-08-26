@@ -26,7 +26,7 @@ Agent loop per orbital pass:
 
 Usage:
     from agent.mission_controller import MissionController
-    agent = MissionController(provider="gemini")
+    agent = MissionController()
     result = agent.run_mission_cycle(payload_dict)
     print(result.mission_log)
 """
@@ -210,7 +210,6 @@ class MissionController:
 
     def __init__(
         self,
-        provider:    str = "gemini",
         api_key:     Optional[str] = None,
         model:       Optional[str] = None,
         use_rag:     bool = True,
@@ -223,7 +222,6 @@ class MissionController:
         try:
             from ground.llm_analyst import OrbitalAnalyst
             self.analyst = OrbitalAnalyst(
-                provider   = provider,
                 api_key    = api_key,
                 model      = model,
                 use_rag    = use_rag,
@@ -541,38 +539,3 @@ class MissionController:
         ]
 
         return "\n".join(log_lines)
-
-
-# ── CLI demo ──────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import os
-
-    sample_payload = {
-        "scene_id": "OSP-AGENT-DEMO",
-        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0,
-                           "lon_min": 77.0, "lon_max": 78.0},
-        "cloud_cover": 0.12,
-        "anomaly_count": 3,
-        "anomalies": [
-            {"type": "ship",   "lat_lon": [8.412, 77.821], "conf": 0.87, "bbox_px": [320, 210, 380, 250]},
-            {"type": "ship",   "lat_lon": [8.388, 77.795], "conf": 0.79, "bbox_px": [280, 300, 340, 330]},
-            {"type": "harbor", "lat_lon": [8.501, 77.901], "conf": 0.92, "bbox_px": [450, 140, 560, 220]},
-        ],
-        "meta": {"model_version": "osp-yolov8n-int8-v1",
-                 "inference_ms": 312.4, "compression_ratio": 85000},
-    }
-
-    has_llm = bool(os.environ.get("GEMINI_API_KEY"))
-    agent   = MissionController(
-        provider   = "gemini",
-        use_rag    = True,
-        use_memory = True,
-    )
-
-    result = agent.run_mission_cycle(sample_payload)
-    print(result.mission_log)
-
-    if not has_llm:
-        print("\n[Demo ran in policy-only mode. Set GEMINI_API_KEY for full LLM analysis.]")

@@ -33,8 +33,12 @@ COPY . .
 # No API key is baked in. ORION reads GEMINI_API_KEY if the host sets one, and
 # otherwise takes a key the visitor types into the sidebar for their own
 # session. A public deployment therefore cannot spend the owner's quota.
+# PYTHONPATH=/app is load-bearing: streamlit runs ground/dashboard.py by path,
+# which puts ground/ on sys.path and not the repo root, so `from orbital import
+# ...` needs the root declared. Outside a container, `pip install -e .`.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
     STREAMLIT_SERVER_HEADLESS=true \
     PORT=8501
 

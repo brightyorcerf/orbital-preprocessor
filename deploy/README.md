@@ -11,7 +11,7 @@ be reachable without a login and without a key.
 | `requirements-dashboard.txt` | The subset the page actually imports. |
 
 The root `Dockerfile` and root `requirements.txt` target the OrbitLab payload:
-they install torch, ultralytics, faiss, sentence-transformers and
+they install torch, ultralytics, sentence-transformers and
 `onnxruntime-gpu`, which is roughly 3.8 GB of wheels and a ~10 GB image. The
 dashboard reaches none of that, because it serves the committed corpus in
 `data/briefs/` rather than running the detector.
@@ -46,14 +46,7 @@ resolving dependencies on its own.
 The image reads `PORT`, so the same build also runs anywhere that injects one
 (Cloud Run, Fly) without an edit.
 
-## Streamlit Community Cloud
-
-Fewer moving parts, but it installs from a `requirements.txt` it discovers
-itself rather than from `deploy/Dockerfile`. Confirm which file it picks up
-before relying on it: the root manifest pulls ~2 GB and will not fit the free
-tier's resource cap.
-
-Whichever platform is used, after the first deploy:
+After the first deploy:
 
 - Set the app's visibility to **public**. A Streamlit app defaults to private,
   and a private app answers every request with a `303` to `/-/login`, which is

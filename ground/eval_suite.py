@@ -652,7 +652,7 @@ def main() -> None:
 
     if args.live:
         from ground.llm_analyst import OrbitalAnalyst
-        analyst = OrbitalAnalyst(provider="gemini", use_rag=True, use_memory=False)
+        analyst = OrbitalAnalyst(use_rag=True, use_memory=False)
         for sid, p in payloads.items():
             log.info(f"Analysing {sid} ...")
             briefs[sid] = analyst.analyse(json.dumps(p), persist_result=False)

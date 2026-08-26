@@ -300,17 +300,6 @@ class BandExplainer:
 
         return factors
 
-    def explain_batch(
-        self,
-        anomalies: list[dict],
-        tile_6ch: np.ndarray,
-    ) -> list[SpectralExplanation]:
-        """Explain all anomalies in a scene."""
-        return [
-            exp for a in anomalies
-            if (exp := self.explain(a, tile_6ch)) is not None
-        ]
-
 
 # ── Uncertainty Estimator ──────────────────────────────────────────────────────
 
@@ -391,73 +380,3 @@ class UncertaintyEstimator:
             factors         = factors,
             recommendations = recommendations,
         )
-
-
-# ── Formatting helpers ─────────────────────────────────────────────────────────
-
-def format_explanation_for_prompt(explanation: SpectralExplanation) -> str:
-    """
-    Convert a SpectralExplanation to a compact LLM-injectable string.
-    Used to provide spectral context in the ORION analyst prompt.
-    """
-    return (
-        f"Spectral analysis [{explanation.anomaly_type.upper()} @ "
-        f"({explanation.lat:.4f}°, {explanation.lon:.4f}°)]: "
-        f"{explanation.spectral_signature} "
-        f"Quality: {explanation.detection_quality}. "
-        f"Dominant bands: {', '.join(explanation.dominant_bands)}. "
-        f"Uncertainty: {'; '.join(explanation.uncertainty_factors[:2])}."
-    )
-
-
-# ── CLI demo ──────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import json
-
-    # Synthetic tile: 640×640×6 with a bright rectangular anomaly
-    tile = np.random.uniform(0.05, 0.25, (640, 640, 6)).astype(np.float32)
-    # Insert a "ship" (bright in SWIR, moderate in visible)
-    tile[200:240, 310:360, 4] = 0.45  # B11 SWIR1 elevated
-    tile[200:240, 310:360, 5] = 0.40  # B12 SWIR2 elevated
-    tile[200:240, 310:360, 1] = 0.30  # B3 slightly elevated
-
-    test_anomaly = {
-        "type":    "ship",
-        "lat_lon": [8.412, 77.821],
-        "conf":    0.87,
-        "bbox_px": [310, 200, 360, 240],
-    }
-
-    explainer = BandExplainer()
-    explanation = explainer.explain(test_anomaly, tile)
-
-    if explanation:
-        print(f"\nSpectral Explanation: {explanation.anomaly_type.upper()}")
-        print(f"Signature: {explanation.spectral_signature}")
-        print(f"Quality:   {explanation.detection_quality}")
-        print(f"Dominant:  {explanation.dominant_bands}")
-        print(f"\nBand contributions:")
-        for b in sorted(explanation.band_contributions,
-                        key=lambda x: x.contribution_score, reverse=True):
-            print(f"  {b.band_name}: score={b.contribution_score:.3f} | {b.interpretation}")
-
-        print(f"\nConfidence: {explanation.confidence_breakdown}")
-        print(f"\nUncertainty factors:")
-        for f in explanation.uncertainty_factors:
-            print(f"  • {f}")
-
-    # Uncertainty report
-    sample_payload = {
-        "scene_id": "OSP-TEST",
-        "cloud_cover": 0.35,
-        "anomalies": [{"type": "ship", "conf": 0.51, "lat_lon": [8.4, 77.8], "bbox_px": [310,200,360,240]}],
-    }
-    estimator = UncertaintyEstimator()
-    report    = estimator.estimate(sample_payload, tile)
-    print(f"\nUncertainty Report: {report.scene_id}")
-    print(f"  Overall quality: {report.overall_quality:.0%}")
-    for f in report.factors:
-        print(f"  • {f}")
-    for r in report.recommendations:
-        print(f"  → {r}")

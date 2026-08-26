@@ -2,8 +2,8 @@
 # ──────────────────────────
 # What the flight payload runs, and nothing else.
 #
-# requirements.txt is the development manifest: it pulls torch, ultralytics,
-# faiss and sentence-transformers because a workstation has to train the model,
+# requirements.txt is the development manifest: it pulls torch, ultralytics
+# and sentence-transformers because a workstation has to train the model,
 # perform the stem surgery and export it. The payload does none of that. It
 # loads an already-quantised ONNX graph and runs it, so the entire training
 # stack is dead weight in orbit.

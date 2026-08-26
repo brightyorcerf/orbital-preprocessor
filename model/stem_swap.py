@@ -221,14 +221,6 @@ def freeze_backbone(model: YOLO, freeze_until: int = 9) -> YOLO:
     return model
 
 
-def unfreeze_all(model: YOLO) -> YOLO:
-    """Unfreeze every parameter for Phase 2 full fine-tune."""
-    for p in model.model.parameters():
-        p.requires_grad = True
-    log.info("All parameters unfrozen for Phase 2 fine-tuning.")
-    return model
-
-
 def verify_stem(model: YOLO, expected_nc: int = 4) -> bool:
     """
     Sanity check both ends of the surgery: the stem accepts 6 channels AND the
@@ -250,20 +242,3 @@ def verify_stem(model: YOLO, expected_nc: int = 4) -> bool:
         f"(nc={detect.nc}, cls_out={detect.cv3[0][-1].out_channels}, expected={expected_nc})"
     )
     return stem_ok and head_ok
-
-
-if __name__ == "__main__":
-    m = swap_stem_to_6ch(weights="yolov8n.pt", nc=4, save_path="yolov8n_6ch.pt")
-    assert verify_stem(m, expected_nc=4), "Stem/head surgery verification failed!"
-    m = freeze_backbone(m, freeze_until=9)
-
-    # Forward pass sanity check
-    dummy = torch.zeros(1, 6, 640, 640)
-    try:
-        with torch.no_grad():
-            out = m.model(dummy)
-        log.info(f"Forward pass OK. Output shapes: {[o.shape for o in out]}")
-    except Exception as e:
-        log.error(f"Forward pass failed: {e}")
-
-    print("\n✓ stem_swap.py complete — ready for training.")

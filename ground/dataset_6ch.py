@@ -43,19 +43,12 @@ Usage:
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
-
-# Running this file as a script puts its own directory on sys.path rather than
-# the repository root, so the sibling `data` package needs help being found.
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+from torch.utils.data import Dataset
 
 from data.tiles import TILE_SUFFIXES, list_tiles, read_tile
 
@@ -216,33 +209,3 @@ def dataset_stats(ds: MultiSpectralDataset) -> dict:
         "total_objects":      total_objects,
         "avg_obj_per_tile":   total_objects / max(1, len(ds)),
     }
-
-
-# ── CLI demo ──────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-    ROOT = Path(__file__).parent.parent
-    sys.path.insert(0, str(ROOT))
-
-    DATASET_DIR = ROOT / "osp_dataset"
-
-    if not (DATASET_DIR / "images" / "train").exists():
-        print("Dataset not found. Run: python data/synth_demo.py")
-        sys.exit(1)
-
-    ds = MultiSpectralDataset(
-        img_dir   = DATASET_DIR / "images" / "train",
-        label_dir = DATASET_DIR / "labels" / "train",
-    )
-
-    stats = dataset_stats(ds)
-    print(f"\nDataset stats:")
-    for k, v in stats.items():
-        print(f"  {k}: {v}")
-
-    # Dataloader test
-    loader = DataLoader(ds, batch_size=4, shuffle=False, collate_fn=collate_fn)
-    imgs, tgts = next(iter(loader))
-    print(f"\nSample batch: images={imgs.shape} targets={[t.shape for t in tgts]}")
-    print("✓ Dataset loader OK")

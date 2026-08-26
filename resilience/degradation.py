@@ -29,14 +29,10 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 import numpy as np
 
 from resilience.faults import BAND_NAMES, band_dropout, flip_weight_bits

@@ -4,7 +4,7 @@ rag/knowledge_base.py
 Maritime intelligence knowledge base for RAG-augmented LLM reasoning.
 
 Contains curated, domain-specific knowledge chunks that are embedded and
-stored in the FAISS vector index (rag/vector_store.py).  The LLM retrieves
+embedded by rag/retrieval.py at start-up.  The LLM retrieves
 the most relevant chunks at query time to ground its analysis in verifiable
 facts rather than relying on parametric memory alone.
 
@@ -303,24 +303,3 @@ MARITIME_KNOWLEDGE_BASE: list[KnowledgeChunk] = [
 def get_all_chunks() -> list[KnowledgeChunk]:
     """Return the full knowledge base."""
     return MARITIME_KNOWLEDGE_BASE
-
-
-def get_chunks_by_category(category: str) -> list[KnowledgeChunk]:
-    return [c for c in MARITIME_KNOWLEDGE_BASE if c.category == category]
-
-
-def get_chunks_by_tags(tags: list[str]) -> list[KnowledgeChunk]:
-    """Return chunks that contain ANY of the given tags."""
-    tag_set = set(tags)
-    return [c for c in MARITIME_KNOWLEDGE_BASE if tag_set & set(c.tags)]
-
-
-def get_categories() -> list[str]:
-    return sorted({c.category for c in MARITIME_KNOWLEDGE_BASE})
-
-
-if __name__ == "__main__":
-    print(f"Knowledge base: {len(MARITIME_KNOWLEDGE_BASE)} chunks")
-    for cat in get_categories():
-        chunks = get_chunks_by_category(cat)
-        print(f"  {cat}: {len(chunks)} chunk(s)")

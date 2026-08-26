@@ -89,17 +89,12 @@ import argparse
 import json
 import logging
 import os
-import sys
 from dataclasses import dataclass, field
 from multiprocessing import Pool
 from pathlib import Path
 
 import cv2
 import numpy as np
-
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from data.tiles import list_tiles, read_tile
 from inference.engine import CLASS_NAMES, CONF_THRESHOLD, IOU_THRESHOLD, postprocess

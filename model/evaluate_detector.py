@@ -40,8 +40,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from inference.engine import CLASS_NAMES, CONF_THRESHOLD, IOU_THRESHOLD, postprocess
 from data.tiles import list_tiles, read_tile
 

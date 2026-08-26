@@ -1,0 +1,30 @@
+# Packaging metadata, for one reason: `pip install -e .` puts the repository
+# root on the import path so `from orbital import ...` resolves regardless of
+# which directory a script was started from.
+#
+# Fifteen modules used to open with a `sys.path.insert(0, ROOT)` preamble to
+# do that by hand, because `python inference/engine.py` puts `inference/` on
+# the path and not the root. That is a packaging problem, and every module
+# that solved it locally had to keep solving it, in slightly different ways,
+# forever. The container images set PYTHONPATH=/app instead, which is the same
+# fix without a build step.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osp"
+version = "0.1.0"
+description = "Orbital Scene Preprocessor — on-board semantic compression for EO payloads"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+packages = [
+    "agent", "config", "data", "ground",
+    "inference", "model", "orbital", "rag", "resilience",
+]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

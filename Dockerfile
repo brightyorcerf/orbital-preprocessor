@@ -6,7 +6,7 @@
 #
 #   payload  (default)  inference only: an already-quantised ONNX graph, the
 #                       preprocessor and the propagator. ~1.5 GB.
-#   training            adds torch, ultralytics, faiss and sentence-transformers
+#   training            adds torch, ultralytics and sentence-transformers
 #                       for train.py / satellite_export.py / the RAG layer.
 #
 # The single-manifest image this replaces was ~10 GB: it installed the whole
@@ -34,8 +34,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# PYTHONPATH is what makes `python inference/engine.py` resolve the sibling
+# packages. Running a file by path puts *its* directory on sys.path, not the
+# repo root, which fifteen modules used to work around with a hand-written
+# sys.path.insert preamble each. One env var replaces all of them; outside a
+# container, `pip install -e .` does the same job.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
     OMP_NUM_THREADS=2
 
 

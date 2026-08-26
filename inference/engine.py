@@ -32,20 +32,12 @@ import hashlib
 import json
 import logging
 import time
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
-
-# `python inference/engine.py` puts this file's directory on sys.path, not the
-# repository root, so the sibling packages are not importable without help.
-# The Dockerfile's entrypoint invokes the module exactly that way.
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
 from data.tiles import list_tiles, read_tile
 from orbital.downlink import RAW_TILE_BYTES_CCSDS
@@ -187,7 +179,7 @@ def preprocess(tile: np.ndarray) -> np.ndarray:
     (H, W, 6) float32 [0,1]  →  (1, 6, 640, 640) float32
 
     Anisotropic (stretch) resize, NOT letterbox. This is deliberate: OSP tiles
-    are cut square upstream by data/preprocess.py, so there is no aspect ratio
+    are cut square upstream by data/dota_prep.py, so there is no aspect ratio
     to preserve, and a stretch keeps `pixel_to_latlon` a straight linear map
     over the tile footprint with no padding offset to subtract back out.
     """
@@ -221,41 +213,6 @@ def xywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
     return out
 
 
-def nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float) -> list[int]:
-    """
-    Class-agnostic CPU NMS — runs on-board post-inference.
-
-    Prefer `batched_nms()` for multi-class output; this is the single-class
-    primitive it delegates to.
-    """
-    if len(boxes) == 0:
-        return []
-
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    keep  = []
-
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        if order.size == 1:
-            break
-
-        inter_x1 = np.maximum(x1[i], x1[order[1:]])
-        inter_y1 = np.maximum(y1[i], y1[order[1:]])
-        inter_x2 = np.minimum(x2[i], x2[order[1:]])
-        inter_y2 = np.minimum(y2[i], y2[order[1:]])
-
-        inter_area = np.maximum(0, inter_x2 - inter_x1) * np.maximum(0, inter_y2 - inter_y1)
-        union_area = areas[i] + areas[order[1:]] - inter_area
-        iou = inter_area / (union_area + 1e-8)
-
-        order = order[1:][iou <= iou_thresh]
-
-    return keep
-
-
 def batched_nms(
     boxes: np.ndarray,
     scores: np.ndarray,
@@ -270,20 +227,30 @@ def batched_nms(
     global NMS pass silently deletes every vessel in a harbour scene — the
     exact scenes we care most about.
 
-    Implemented with the standard coordinate-offset trick: shift each class
-    into its own disjoint region of coordinate space so boxes of different
-    classes can never register a non-zero IoU, then run one NMS pass. This
-    keeps the O(n log n) single-pass cost instead of looping per class.
+    OpenCV ships exactly this as `cv2.dnn.NMSBoxesBatched`, which applies the
+    same per-class suppression and takes boxes as [x, y, w, h]. cv2 is already
+    a hard dependency of this module for tile decode and resize, so the
+    hand-written suppression loop this replaces bought nothing. The score
+    threshold is 0.0 because `postprocess` has already filtered on confidence.
     """
     if len(boxes) == 0:
         return []
 
-    # Offset must exceed the largest possible coordinate so classes cannot overlap.
-    max_coord = float(boxes.max()) if boxes.size else 0.0
-    offsets = cls_ids.astype(np.float32) * (max_coord + 1.0)
-    shifted = boxes + offsets[:, None]
+    xywh = np.column_stack([
+        boxes[:, 0],
+        boxes[:, 1],
+        boxes[:, 2] - boxes[:, 0],
+        boxes[:, 3] - boxes[:, 1],
+    ]).astype(np.float32)
 
-    return nms(shifted, scores, iou_thresh)
+    keep = cv2.dnn.NMSBoxesBatched(
+        xywh.tolist(),
+        scores.astype(np.float32).tolist(),
+        cls_ids.astype(np.int32).tolist(),
+        0.0,
+        float(iou_thresh),
+    )
+    return [int(i) for i in np.asarray(keep).flatten()]
 
 
 def postprocess(
@@ -841,15 +808,7 @@ class MockONNXSession:
 # ── CLI entry ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import argparse, sys
-
-    # Running this file directly puts inference/ on sys.path, not the repo
-    # root, so sibling packages (config, agent, ground) are unimportable.
-    # The README documents `python inference/engine.py ...`, so make that work
-    # rather than silently requiring `python -m inference.engine`.
-    _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
-    if _REPO_ROOT not in sys.path:
-        sys.path.insert(0, _REPO_ROOT)
+    import argparse
 
     parser = argparse.ArgumentParser(description="OSP on-board inference engine")
     parser.add_argument("--model",  required=True, help="Path to INT8 ONNX model")

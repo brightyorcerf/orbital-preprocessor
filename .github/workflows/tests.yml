@@ -29,14 +29,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
-      - name: Orbital mechanics, scheduler and authority boundary
-        run: python -m pytest tests/test_orbital.py -v
-
-      - name: Failure behaviours and fault injection
-        run: python -m pytest tests/test_resilience.py -v
-
-      - name: Engineering path
-        run: python -m pytest tests/test_pipeline.py -v
+      # One invocation, so a suite added under tests/ is run rather than
+      # silently skipped. The three named steps this replaces left
+      # test_ccsds, test_protect and test_raw_pricing out of CI entirely.
+      - name: Test suite
+        run: python -m pytest tests/ -v
 
       - name: Report skips
         if: always()

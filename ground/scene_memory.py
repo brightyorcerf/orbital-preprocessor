@@ -74,10 +74,6 @@ class RegionHistory:
     first_seen:     Optional[str]
     last_seen:      Optional[str]
 
-    @property
-    def is_recurring(self) -> bool:
-        return self.anomaly_count >= 2
-
     def to_context_string(self) -> str:
         """LLM-injectable summary of regional history."""
         if self.anomaly_count == 0:
@@ -352,16 +348,6 @@ class SceneMemory:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_anomaly_heatmap_data(self) -> list[dict]:
-        """
-        Return all stored anomaly locations for Folium heatmap layer.
-        Each point: {lat, lon, weight (conf)}.
-        """
-        rows = self._conn.execute(
-            "SELECT lat, lon, conf FROM anomalies ORDER BY conf DESC LIMIT 500"
-        ).fetchall()
-        return [{"lat": r["lat"], "lon": r["lon"], "weight": r["conf"]} for r in rows]
-
     def total_scenes(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM scenes").fetchone()[0]
 
@@ -384,40 +370,3 @@ def get_memory(db_path: str | Path = DEFAULT_DB_PATH) -> SceneMemory:
     if _default_memory is None:
         _default_memory = SceneMemory(db_path)
     return _default_memory
-
-
-# ── CLI demo ──────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import datetime
-    import random
-
-    mem = SceneMemory(db_path=":memory:")   # in-memory for demo
-
-    # Seed with 3 fake historical passes
-    for i in range(3):
-        ts = (
-            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=92 * (i + 1))
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        fake_payload = {
-            "scene_id":      f"OSP-HIST-{i:04d}",
-            "timestamp_utc": ts,
-            "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0,
-                               "lon_min": 77.0, "lon_max": 78.0},
-            "cloud_cover": round(random.uniform(0.05, 0.30), 2),
-            "anomaly_count": 2,
-            "anomalies": [
-                {"type": "ship", "lat_lon": [8.41 + random.uniform(-0.05, 0.05),
-                                             77.82 + random.uniform(-0.05, 0.05)],
-                 "conf": round(random.uniform(0.70, 0.95), 2), "bbox_px": [300, 200, 360, 240]},
-            ],
-        }
-        fake_brief = {"alert_level": ["GREEN", "YELLOW", "ORANGE"][i], "summary": f"Pass {i+1}"}
-        mem.remember(fake_payload, fake_brief)
-
-    # Query
-    history = mem.query_region(lat=8.41, lon=77.82, radius_km=30)
-    print(history.to_context_string())
-    print(f"\nTotal scenes in memory: {mem.total_scenes()}")
-    print(f"Total anomalies in memory: {mem.total_anomalies()}")

@@ -21,98 +21,19 @@ Test suite:
   T13 Trained detector clears its accuracy floor (model/evaluate_detector.py)
 
 Run:
-  python test_pipeline.py              # all tests, no API key needed
-  GEMINI_API_KEY=xxx python test_pipeline.py   # T10 makes a real LLM call
+  pytest tests/test_pipeline.py -v                       # no API key needed
+  GEMINI_API_KEY=xxx pytest tests/test_pipeline.py -v    # T10 calls the LLM
 """
 
 import json
 import os
 import struct
-import sys
-import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-# ── Path setup ────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "inference"))
-
-# ── ANSI colours for test output ─────────────────────────────────────────────
-GREEN  = "\033[92m"
-RED    = "\033[91m"
-YELLOW = "\033[93m"
-CYAN   = "\033[96m"
-BOLD   = "\033[1m"
-RESET  = "\033[0m"
-
-PASS = f"{GREEN}PASS{RESET}"
-FAIL = f"{RED}FAIL{RESET}"
-SKIP = f"{YELLOW}SKIP{RESET}"
-
-
-# ── Test runner ───────────────────────────────────────────────────────────────
-
-_results: list[tuple[str, str, str]] = []   # (name, status, detail)
-
-
-class SkipTest(Exception):
-    """Raised by a test whose precondition is absent (e.g. no trained artifact).
-
-    A skip is reported as a skip and does not fail the suite, but it is also
-    never reported as a pass — the distinction matters for T13, where the
-    difference between "the detector meets its accuracy floor" and "no model
-    was present to check" is the entire question.
-    """
-
-
-# This file is both a standalone runner (`python test_pipeline.py`, which prints
-# a report and sets an exit code) and a pytest module (`pytest tests/test_pipeline.py`,
-# which CI runs). Those two want opposite things from a failing test: the runner
-# needs the exception swallowed so the remaining tests still execute and the
-# report is complete, and pytest needs it raised or it records a pass.
-#
-# For most of this file's life only the first half was true, so every test in it
-# reported PASS under pytest no matter what it asserted. A green badge over a
-# suite that cannot fail is worse than no badge, so the outcome is re-raised
-# when pytest is the thing driving.
-_UNDER_PYTEST = "pytest" in sys.modules
-
-
-def run_test(name: str):
-    """Decorator — catches exceptions, records PASS/FAIL/SKIP."""
-    def decorator(fn):
-        def wrapper():
-            print(f"  {CYAN}{name}{RESET} ... ", end="", flush=True)
-            t0 = time.perf_counter()
-            try:
-                detail = fn() or ""
-                ms = (time.perf_counter() - t0) * 1000
-                print(f"{PASS}  {detail}  [{ms:.1f}ms]")
-                _results.append((name, "PASS", detail))
-            except SkipTest as e:
-                ms = (time.perf_counter() - t0) * 1000
-                print(f"{SKIP}  {e}  [{ms:.1f}ms]")
-                _results.append((name, "SKIP", str(e)))
-                if _UNDER_PYTEST:
-                    import pytest
-                    pytest.skip(str(e))
-            except AssertionError as e:
-                ms = (time.perf_counter() - t0) * 1000
-                print(f"{FAIL}  {e}  [{ms:.1f}ms]")
-                _results.append((name, "FAIL", str(e)))
-                if _UNDER_PYTEST:
-                    raise
-            except Exception as e:
-                ms = (time.perf_counter() - t0) * 1000
-                print(f"{FAIL}  {type(e).__name__}: {e}  [{ms:.1f}ms]")
-                _results.append((name, "ERROR", f"{type(e).__name__}: {e}"))
-                if _UNDER_PYTEST:
-                    raise
-        wrapper.__name__ = fn.__name__
-        return wrapper
-    return decorator
 
 
 # ── Mock ONNX session ─────────────────────────────────────────────────────────
@@ -170,38 +91,12 @@ class MockONNXSession:
 
 # ── Patched engine.OSPEngine ──────────────────────────────────────────────────
 
-def build_mock_engine():
-    """Build an OSPEngine with session replaced by MockONNXSession."""
-    import inference.engine as eng
-
-    from config.platforms import get_profile
-
-    # Temporarily patch build_session to return mock
-    orig_build = eng.build_session
-
-    def mock_build(path, profile=None):
-        return MockONNXSession()
-
-    eng.build_session = mock_build
-    engine = eng.OSPEngine.__new__(eng.OSPEngine)
-
-    # Manually initialise (skip warm-up to avoid CUDA calls).
-    # `profile` must be set explicitly: __init__ is bypassed here, and run_tile
-    # consults the profile for link/latency budget enforcement.
-    engine.session    = MockONNXSession()
-    engine.input_name = "images"
-    engine._model_path = "mock://osp-yolov8n-int8-v1.onnx"
-    engine.profile    = get_profile("moi-1a")
-
-    eng.build_session = orig_build  # restore
-    return engine
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  TESTS
 # ══════════════════════════════════════════════════════════════════════════════
 
-@run_test("T1  6-band tile synthesis (synthetic_bands.py)")
+# T1  6-band tile synthesis (synthetic_bands.py)
 def test_synthetic_bands():
     from data.synthetic_bands import rgb_to_6band, _bilinear_upsample
 
@@ -233,10 +128,10 @@ def test_synthetic_bands():
     ng = np.abs(np.diff(nearest [318:323, 320])).mean()
     assert bg <= ng + 0.02, f"bilinear ({bg:.4f}) not smoother than nearest ({ng:.4f})"
 
-    return f"shape={bands.shape} dtype={bands.dtype} range=[{bands.min():.3f},{bands.max():.3f}] SWIR_bilinear=✓"
+    print(f"shape={bands.shape} dtype={bands.dtype} range=[{bands.min():.3f},{bands.max():.3f}] SWIR_bilinear=✓")
 
 
-@run_test("T2  Tensor pre-processing shape/dtype (engine.preprocess)")
+# T2  Tensor pre-processing shape/dtype (engine.preprocess)
 def test_preprocess_contract():
     from inference.engine import preprocess
 
@@ -255,10 +150,10 @@ def test_preprocess_contract():
     tensor_sm = preprocess(tile_sm)
     assert tensor_sm.shape == (1, 6, 640, 640), f"resize failed: {tensor_sm.shape}"
 
-    return f"(1,6,640,640) float32 ✓ | non-square resize ✓"
+    print(f"(1,6,640,640) float32 ✓ | non-square resize ✓")
 
 
-@run_test("T3  Stem-swap domain-adaptation weight init (model/stem_swap.py)")
+# T3  Stem-swap domain-adaptation weight init (model/stem_swap.py)
 def test_stem_weight_init():
     # torch is a training dependency, not a runtime one: the deployed artifact
     # is an ONNX graph. Its absence is a missing precondition, not a failure,
@@ -266,7 +161,7 @@ def test_stem_weight_init():
     try:
         import torch
     except ImportError:
-        raise SkipTest("torch not installed — training dependency, see requirements.txt")
+        pytest.skip("torch not installed — training dependency, see requirements.txt")
 
     # Simulate the swap: old_weight is [32,3,3,3] (pretrained RGB stem)
     torch.manual_seed(42)
@@ -307,14 +202,14 @@ def test_stem_weight_init():
     assert swir_std <= rgb_std + 1e-6, \
         f"SWIR std ({swir_std:.4f}) > RGB std ({rgb_std:.4f})"
 
-    return (f"ch0-2=pretrained ✓ | ch3-5=RGB_mean ✓ | "
+    print(f"ch0-2=pretrained ✓ | ch3-5=RGB_mean ✓ | "
             f"rgb_std={rgb_std:.4f} swir_std={swir_std:.4f}")
 
 
-@run_test("T4  Mock YOLO inference → postprocess → NMS (engine.py)")
+# T4  Mock YOLO inference → postprocess → NMS (engine.py)
 def test_postprocess_nms():
     from inference.engine import MockONNXSession  # won't exist — use local mock
-    from inference.engine import postprocess, nms, xywh_to_xyxy, CONF_THRESHOLD
+    from inference.engine import postprocess, batched_nms, xywh_to_xyxy, CONF_THRESHOLD
 
     # Build the same synthetic output as MockONNXSession.run()
     raw = np.zeros((1, 8, 8400), dtype=np.float32)
@@ -347,10 +242,10 @@ def test_postprocess_nms():
     ship_dets = [d for d in dets if d["cls_name"] == "ship"]
     assert len(ship_dets) == 2, f"NMS should preserve 2 ships, got {len(ship_dets)}"
 
-    return f"{len(dets)} dets: {[d['cls_name'] for d in dets]} | all_conf≥{CONF_THRESHOLD}"
+    print(f"{len(dets)} dets: {[d['cls_name'] for d in dets]} | all_conf≥{CONF_THRESHOLD}")
 
 
-@run_test("T5  Geo-projection: pixel → WGS-84 lat/lon")
+# T5  Geo-projection: pixel → WGS-84 lat/lon
 def test_geo_projection():
     from inference.engine import pixel_to_latlon
 
@@ -380,10 +275,10 @@ def test_geo_projection():
         assert fp["lat_min"] <= lat <= fp["lat_max"], f"lat {lat} out of bounds"
         assert fp["lon_min"] <= lon <= fp["lon_max"], f"lon {lon} out of bounds"
 
-    return "centre ✓ | corners ✓ | 20 random projections ✓"
+    print("centre ✓ | corners ✓ | 20 random projections ✓")
 
 
-@run_test("T6  OSPPayload construction and JSON schema")
+# T6  OSPPayload construction and JSON schema
 def test_payload_json():
     from inference.engine import Anomaly as EngineAnomaly, OSPPayload
 
@@ -424,10 +319,10 @@ def test_payload_json():
     # JSON must be compact (no extra whitespace)
     assert "  " not in json_str, "JSON has extra whitespace (not compact)"
 
-    return f"{len(json_str.encode())}B | {d['anomaly_count']} anomalies | schema ✓"
+    print(f"{len(json_str.encode())}B | {d['anomaly_count']} anomalies | schema ✓")
 
 
-@run_test("T7  Proto serialization round-trip (serialization_utils.py)")
+# T7  Proto serialization round-trip (serialization_utils.py)
 def test_proto_roundtrip():
     from inference.engine import Anomaly as EngineAnomaly, OSPPayload
     from inference.serialization_utils import (
@@ -497,11 +392,11 @@ def test_proto_roundtrip():
     assert d_proto["anomaly_count"] == d_engine["anomaly_count"], "anomaly_count schema mismatch"
     assert len(d_proto["anomalies"]) == len(d_engine["anomalies"]), "anomaly list length mismatch"
 
-    return (f"binary={len(binary)}B | 4 anomalies | "
+    print(f"binary={len(binary)}B | 4 anomalies | "
             f"lat/lon precision=1e-9 | enum_roundtrip ✓")
 
 
-@run_test("T8  Compression report — PRD targets")
+# T8  Compression report — PRD targets
 def test_compression_targets():
     from inference.engine import Anomaly as EngineAnomaly, OSPPayload
     from inference.serialization_utils import get_compression_report
@@ -539,13 +434,13 @@ def test_compression_targets():
     print("")  # newline before the report
     print(report)
 
-    return (f"proto={report.proto_bytes}B | "
+    print(f"proto={report.proto_bytes}B | "
             f"{report.proto_vs_json_ratio:.1f}× vs JSON | "
             f"{bandwidth_reduction:.6%} BW reduction | "
             f"PRD 99.99% ✓")
 
 
-@run_test("T9  VRAM budget verification (<4 GB constraint)")
+# T9  VRAM budget verification (<4 GB constraint)
 def test_vram_budget():
     """
     Compute the peak VRAM requirement for the on-board pipeline.
@@ -587,13 +482,13 @@ def test_vram_budget():
 
     vram_utilisation = (peak_mb / limit_mb) * 100
 
-    return (f"peak={peak_mb:.1f}MB / 4096MB | "
+    print(f"peak={peak_mb:.1f}MB / 4096MB | "
             f"utilisation={vram_utilisation:.2f}% | "
             f"headroom={headroom_mb:.0f}MB | "
             f"input={input_tensor_mb:.2f}MB model≤{model_mb:.1f}MB ORT≤{ort_overhead_mb:.0f}MB")
 
 
-@run_test("T10 Semantic integrity — LLM prompt construction")
+# T10 Semantic integrity — LLM prompt construction
 def test_semantic_integrity():
     """
     Verifies that the JSON recovered from the proto round-trip contains all
@@ -670,7 +565,7 @@ def test_semantic_integrity():
     if api_key:
         try:
             from ground.llm_analyst import OrbitalAnalyst
-            analyst = OrbitalAnalyst(provider="gemini", api_key=api_key)
+            analyst = OrbitalAnalyst(api_key=api_key)
             brief   = analyst.analyse(json_str)
 
             # Validate response schema
@@ -689,19 +584,19 @@ def test_semantic_integrity():
                 f"LLM assessments don't reference original types. " \
                 f"Got: {assessed_types}, expected subset of: {original_types}"
 
-            return (f"prompt_fields ✓ | LIVE LLM ✓ | "
+            print(f"prompt_fields ✓ | LIVE LLM ✓ | "
                     f"alert={brief['alert_level']} | "
                     f"assessed_types={sorted(assessed_types)}")
         except Exception as e:
             # Live call failed — downgrade to prompt-only pass
-            return (f"prompt_fields ✓ | LIVE LLM FAILED ({e}) | "
+            print(f"prompt_fields ✓ | LIVE LLM FAILED ({e}) | "
                     f"set GEMINI_API_KEY for live validation")
     else:
-        return (f"prompt_fields ✓ | schema ✓ | "
+        print(f"prompt_fields ✓ | schema ✓ | "
                 f"LIVE CALL SKIPPED (no GEMINI_API_KEY)")
 
 
-@run_test("T11 Full end-to-end pipeline integration")
+# T11 Full end-to-end pipeline integration
 def test_full_pipeline():
     """
     Runs the complete pipeline in sequence:
@@ -790,7 +685,7 @@ def test_full_pipeline():
     d = json.loads(final_json)
     assert d["anomaly_count"] == len(anomalies)
 
-    return (f"tile(640,640,6) → tensor(1,6,640,640) → "
+    print(f"tile(640,640,6) → tensor(1,6,640,640) → "
             f"{len(dets)} dets → proto {len(binary)}B → "
             f"JSON {len(final_json)}B | {report.proto_vs_raw_tile:,.0f}:1")
 
@@ -799,7 +694,7 @@ def test_full_pipeline():
 #  T12  TRAINING CORPUS ↔ ENGINE CLASS MAP
 # ══════════════════════════════════════════════════════════════════════════════
 
-@run_test("T12  Training corpus / class-map agreement")
+# T12  Training corpus / class-map agreement
 def test_training_corpus():
     """The generator, the head and the engine must agree on the class list.
 
@@ -848,7 +743,7 @@ def test_training_corpus():
         f"would train on no positives"
     )
 
-    return f"{len(DATA_CLASSES)} classes agree, {n_boxes} boxes over 60 tiles"
+    print(f"{len(DATA_CLASSES)} classes agree, {n_boxes} boxes over 60 tiles")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -862,7 +757,7 @@ def test_training_corpus():
 MAP50_FLOOR = 0.50
 
 
-@run_test("T13  Trained detector accuracy floor")
+# T13  Trained detector accuracy floor
 def test_trained_detector():
     """Score whichever artifact exists on the validation split.
 
@@ -890,9 +785,9 @@ def test_trained_detector():
         val_labels = ROOT / "osp_dataset" / "labels" / "val"
 
     if not val_images.exists():
-        raise SkipTest("no validation split — run: python data/synth_demo.py")
+        pytest.skip("no validation split — run: python data/synth_demo.py")
     if not (int8.exists() or best.exists()):
-        raise SkipTest("no trained artifact — run: python train.py --export")
+        pytest.skip("no trained artifact — run: python train.py --export")
 
     from model.evaluate_detector import OnnxBackend, TorchBackend, evaluate
 
@@ -917,11 +812,11 @@ def test_trained_detector():
         f"the metric is not covering the head"
     )
 
-    return (f"{label}: mAP50 {r['map50']:.3f}, mAP50-95 {r['map50_95']:.3f}, "
+    print(f"{label}: mAP50 {r['map50']:.3f}, mAP50-95 {r['map50_95']:.3f}, "
             f"{r['detections_above_conf']} dets on {r['tiles']} tiles")
 
 
-@run_test("T16  Rate-distortion accounting (ground/rate_distortion.py)")
+# T16  Rate-distortion accounting (ground/rate_distortion.py)
 def test_rate_distortion_accounting():
     """The bytes-vs-detections curve must account undelivered tiles as missed.
 
@@ -966,12 +861,12 @@ def test_rate_distortion_accounting():
     many = brief_bytes([{"cls_id": 0, "conf": 0.9, "bbox": [1.0, 2.0, 3.0, 4.0]}] * 8, "T")
     assert many > few, f"8 anomalies ({many} B) not larger than 1 ({few} B)"
 
-    return f"undelivered counted as missed, monotonic, brief 1->8 anomalies {few}->{many} B"
+    print(f"undelivered counted as missed, monotonic, brief 1->8 anomalies {few}->{many} B")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 
-@run_test("T14  Tile storage formats agree (data/tiles.py)")
+# T14  Tile storage formats agree (data/tiles.py)
 def test_tile_format_equivalence():
     """A tile must read identically whether stored as .npy or as RGB.
 
@@ -1023,10 +918,9 @@ def test_tile_format_equivalence():
         except ValueError:
             pass
 
-    return f"npy==png exact, {len(TILE_SUFFIXES)} suffixes, corrupt file raises"
+    print(f"npy==png exact, {len(TILE_SUFFIXES)} suffixes, corrupt file raises")
 
-
-@run_test("T15  DOTA label conversion (data/dota_prep.py)")
+# T15  DOTA label conversion (data/dota_prep.py)
 def test_dota_label_conversion():
     """Both DOTA label dialects map onto OSP's four classes correctly.
 
@@ -1081,60 +975,4 @@ def test_dota_label_conversion():
     inflation = ((x2 - x1) * (y2 - y1)) / quad_area(diamond)
     assert abs(inflation - 2.0) < 1e-3, f"45-degree inflation = {inflation:.4f}, expected 2.0"
 
-    return f"both dialects map correctly, 45-degree AABB inflation = {inflation:.2f}x"
-
-
-#  ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    print(f"\n{BOLD}{'━'*60}{RESET}")
-    print(f"{BOLD}  OSP Pipeline Verification Suite{RESET}")
-    print(f"{BOLD}{'━'*60}{RESET}\n")
-
-    tests = [
-        test_synthetic_bands,
-        test_preprocess_contract,
-        test_stem_weight_init,
-        test_postprocess_nms,
-        test_geo_projection,
-        test_payload_json,
-        test_proto_roundtrip,
-        test_compression_targets,
-        test_vram_budget,
-        test_semantic_integrity,
-        test_full_pipeline,
-        test_training_corpus,
-        test_trained_detector,
-        test_tile_format_equivalence,
-        test_dota_label_conversion,
-        test_rate_distortion_accounting,
-    ]
-
-    for t in tests:
-        t()
-
-    # ── Summary ────────────────────────────────────────────────────────────────
-    passed  = sum(1 for _, s, _ in _results if s == "PASS")
-    failed  = sum(1 for _, s, _ in _results if s in ("FAIL", "ERROR"))
-    skipped = sum(1 for _, s, _ in _results if s == "SKIP")
-    total   = len(_results)
-
-    print(f"\n{BOLD}{'━'*60}{RESET}")
-    print(f"{BOLD}  Results: {GREEN}{passed}/{total} PASS{RESET}", end="")
-    if skipped:
-        print(f"  {YELLOW}{skipped} SKIP{RESET}", end="")
-    if failed:
-        print(f"  {RED}{failed} FAIL{RESET}", end="")
-    print(f"\n{BOLD}{'━'*60}{RESET}\n")
-
-    if failed:
-        print("Failed tests:")
-        for name, status, detail in _results:
-            if status in ("FAIL", "ERROR"):
-                print(f"  {RED}✗{RESET} {name}: {detail}")
-        sys.exit(1)
-    else:
-        print(f"  {GREEN}✓ All {total} tests passed.{RESET}")
-        print(f"  {CYAN}Set GEMINI_API_KEY to enable live LLM validation in T10.{RESET}\n")
-        sys.exit(0)
+    print(f"both dialects map correctly, 45-degree AABB inflation = {inflation:.2f}x")

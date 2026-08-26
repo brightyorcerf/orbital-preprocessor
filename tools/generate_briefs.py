@@ -50,13 +50,10 @@ import math
 import shutil
 from pathlib import Path
 
-import sys
 
 import numpy as np
 
 # Run as a script from anywhere: put the repository root on the import path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from data.tiles import list_tiles, read_tile
 from ground.rate_distortion import ccsds_tile_bytes
 

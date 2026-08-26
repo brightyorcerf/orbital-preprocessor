@@ -25,13 +25,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.tiles import list_tiles, read_tile
 

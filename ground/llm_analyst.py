@@ -17,9 +17,8 @@ Key upgrades over v1:
                                output surfaces in the final response
   5. Semantic scene description — natural-language scene narrative for operators
 
-Provider-agnostic: pass any OpenAI-compatible or Gemini key via env var.
+Pass a Gemini key via GEMINI_API_KEY, or supply one per call.
 Default: Google Gemini (free tier, gemini-2.0-flash).
-Alt:     Any OpenAI-compatible endpoint (Claude, GPT-4o, local LLM via Ollama).
 """
 
 import json
@@ -308,47 +307,6 @@ def call_gemini(
     return _parse_llm_json(raw_text)
 
 
-# ── Provider: OpenAI-compatible (Claude, GPT-4o, local) ──────────────────────
-
-def call_openai_compatible(
-    payload_json: str,
-    base_url: str,
-    api_key: str,
-    model: str,
-    rag_context: str = "",
-    historical_context: str = "",
-) -> dict:
-    """Generic OpenAI-compatible endpoint (Anthropic, OpenAI, Ollama, etc.)"""
-    try:
-        from openai import OpenAI
-    except ImportError:
-        raise ImportError("openai not installed. Run: pip install openai")
-
-    client = OpenAI(base_url=base_url, api_key=api_key)
-
-    user_message = build_user_message_v2(
-        payload_json, rag_context, historical_context
-    )
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system",  "content": ANALYST_SYSTEM_PROMPT_V2},
-            {"role": "user",    "content": user_message},
-        ],
-        temperature=0.1,
-        # Matched to the Gemini path: 2048 truncated mid-object once the
-        # reasoning trace and per-anomaly assessments were both populated,
-        # which was a significant share of the "malformed JSON" we were
-        # blaming on the model's formatting.
-        max_tokens=4096,
-        response_format={"type": "json_object"},
-    )
-
-    raw_text = response.choices[0].message.content.strip()
-    return _parse_llm_json(raw_text)
-
-
 # ── JSON parser ───────────────────────────────────────────────────────────────
 
 def _parse_llm_json(raw: str) -> dict:
@@ -418,27 +376,21 @@ class OrbitalAnalyst:
 
     def __init__(
         self,
-        provider: str = "gemini",      # "gemini" | "openai"
         api_key:  Optional[str] = None,
         model:    Optional[str] = None,
         use_rag:  bool = True,
         use_memory: bool = True,
         rag_backend: str = "sentence_transformers",
-        base_url: Optional[str] = None,
     ):
-        # NOTE: the "anthropic" provider was removed rather than fixed. It
-        # pointed call_openai_compatible() at https://api.anthropic.com/v1,
-        # which is not an OpenAI-shaped endpoint — that path could never have
-        # returned a response. Any OpenAI-compatible gateway (including ones
-        # fronting Claude) still works via provider="openai" + base_url=.
-        self.provider  = provider
-        self.base_url  = base_url
-        self.api_key   = api_key or os.environ.get(
-            "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
-        )
-        self.model = model or (
-            "gemini-2.5-flash" if provider == "gemini" else "gpt-4o-mini"
-        )
+        # Gemini is the only provider. Two others were declared here and
+        # neither was reachable: "anthropic" pointed an OpenAI client at
+        # https://api.anthropic.com/v1, which is not an OpenAI-shaped endpoint
+        # and could never have returned a response, and the OpenAI path was
+        # absent from both deployment manifests, so the artifact anyone
+        # actually runs could not have taken it. A branch that has never
+        # executed is not portability, it is an untested claim of it.
+        self.api_key   = api_key or os.environ.get("GEMINI_API_KEY")
+        self.model     = model or "gemini-2.5-flash"
         self.use_rag    = use_rag
         self.use_memory = use_memory
         self._rag       = None
@@ -483,7 +435,7 @@ class OrbitalAnalyst:
             f"Analysing {len(payload_json)}B payload | "
             f"RAG={'on' if self._rag else 'off'} | "
             f"memory={'on' if self._memory else 'off'} | "
-            f"{self.provider}/{self.model}"
+            f"gemini/{self.model}"
         )
 
         # ── Step 1: RAG retrieval ──────────────────────────────────────────────
@@ -528,26 +480,10 @@ class OrbitalAnalyst:
                 log.warning(f"Memory retrieval failed: {e}")
 
         # ── Step 3: LLM call ──────────────────────────────────────────────────
-        if self.provider == "gemini":
-            brief = call_gemini(
-                payload_json, model=self.model, api_key=self.api_key,
-                rag_context=rag_context, historical_context=historical_context,
-            )
-        elif self.provider == "openai":
-            brief = call_openai_compatible(
-                payload_json,
-                base_url=self.base_url or "https://api.openai.com/v1",
-                api_key=self.api_key,
-                model=self.model,
-                rag_context=rag_context,
-                historical_context=historical_context,
-            )
-        else:
-            raise ValueError(
-                f"Unknown provider: {self.provider}. Use 'gemini' or 'openai'. "
-                "The 'openai' provider accepts any OpenAI-compatible endpoint "
-                "via base_url= (vLLM, Ollama, OpenRouter, LM Studio)."
-            )
+        brief = call_gemini(
+            payload_json, model=self.model, api_key=self.api_key,
+            rag_context=rag_context, historical_context=historical_context,
+        )
 
         # ── Step 4: Fill semantic narrative if LLM omitted it ─────────────────
         if not brief.get("scene_narrative") and not brief.get("_raw"):
@@ -571,51 +507,3 @@ class OrbitalAnalyst:
             "RED":     "#ef4444",
             "UNKNOWN": "#6b7280",
         }.get(brief.get("alert_level", "UNKNOWN"), "#6b7280")
-
-    def get_memory_stats(self) -> dict:
-        """Return memory database statistics for the dashboard."""
-        if not self._memory:
-            return {"status": "disabled"}
-        return {
-            "status":         "active",
-            "total_scenes":   self._memory.total_scenes(),
-            "total_anomalies": self._memory.total_anomalies(),
-            "db_path":        str(self._memory.db_path),
-        }
-
-
-# ── Demo ──────────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    mock_payload = json.dumps({
-        "scene_id": "OSP-A3F2C1B4",
-        "timestamp_utc": "2026-05-10T09:12:44Z",
-        "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0, "lon_min": 77.0, "lon_max": 78.0},
-        "cloud_cover": 0.08,
-        "anomaly_count": 3,
-        "anomalies": [
-            {"type": "ship",   "lat_lon": [8.412, 77.821], "conf": 0.87, "bbox_px": [320, 210, 380, 250]},
-            {"type": "ship",   "lat_lon": [8.388, 77.795], "conf": 0.79, "bbox_px": [280, 300, 340, 330]},
-            {"type": "harbor", "lat_lon": [8.501, 77.901], "conf": 0.92, "bbox_px": [450, 140, 560, 220]},
-        ],
-        "meta": {
-            "model_version":    "osp-yolov8n-int8-v1",
-            "inference_ms":     312.4,
-            "compression_ratio": 85000,
-        }
-    })
-
-    print("Mock OSP Payload (what the satellite downlinks):")
-    print(f"  Size: {len(mock_payload)} bytes\n")
-
-    analyst = OrbitalAnalyst(provider="gemini", use_rag=True, use_memory=True)
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("No GEMINI_API_KEY found. Set it to run live analysis.")
-        print("\nSystem prompt preview:")
-        print(ANALYST_SYSTEM_PROMPT_V2[:600] + "...")
-    else:
-        print("Running RAG-augmented analysis ...")
-        brief = analyst.analyse(mock_payload)
-        print(json.dumps(brief, indent=2))

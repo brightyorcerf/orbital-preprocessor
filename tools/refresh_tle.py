@@ -31,7 +31,6 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
 
 CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=resource&FORMAT=tle"
 

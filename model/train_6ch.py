@@ -58,7 +58,6 @@ import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -371,19 +370,6 @@ class ModelEMA:
                 # Integer buffers (BatchNorm's num_batches_tracked) cannot be
                 # averaged; copying keeps them consistent with the live model.
                 v.copy_(msd[k])
-
-
-def make_scaler(enabled: bool):
-    """AMP gradient scaler, across the torch versions this repo supports.
-
-    `torch.amp.GradScaler("cuda", ...)` is the current spelling; the
-    `torch.cuda.amp` one is deprecated in torch >= 2.4 but is the only form
-    that exists below it, and requirements.txt allows >= 2.1.
-    """
-    try:
-        return torch.amp.GradScaler("cuda", enabled=enabled)
-    except (AttributeError, TypeError):
-        return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def build_optimizer(model, lr: float, weight_decay: float = 5e-4):
@@ -708,7 +694,7 @@ def main() -> None:
     criterion = v8DetectionLoss(model)
 
     amp_on = device == "cuda" and not args.no_amp
-    scaler = make_scaler(amp_on)
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_on)
     log.info(f"Mixed precision: {'on' if amp_on else 'off'}")
 
     ema = ModelEMA(model, decay=args.ema_decay) if args.ema_decay > 0 else None

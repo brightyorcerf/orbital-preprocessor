@@ -3,23 +3,23 @@
 # What the public dashboard needs, and nothing else.
 #
 # The root requirements.txt is the documented path for *using* OSP: it pulls
-# torch, ultralytics, faiss and sentence-transformers, roughly 2 GB. None of
+# torch, ultralytics and sentence-transformers, roughly 2 GB. None of
 # that is reachable from the dashboard, which serves the committed brief corpus
-# in data/briefs/ rather than running the detector. Streamlit Community Cloud
-# caps an app's resources well below 2 GB, so installing the full manifest is
-# not merely slow, it does not fit.
+# in data/briefs/ rather than running the detector. The free-tier Space caps
+# an app's resources well below 2 GB, so installing the full manifest is not
+# merely slow, it does not fit.
 #
 # Every import the dashboard makes outside this list is wrapped in a
 # try/except ImportError with a visible degraded state, which is why the RAG
 # stack and the training-only dependencies can be dropped without the page
 # failing to boot. See ground/dashboard.py's _AVAILABLE flags.
 
-# ── Page shell and map ────────────────────────────────────────────────────────
+# ── Page shell ────────────────────────────────────────────────────────────────
 streamlit>=1.32,<2.0
-folium>=0.16,<1.0
-streamlit-folium>=0.18,<1.0
 
 # ── ground/globe.py (imported unguarded, so these are boot-critical) ──────────
+# It draws both map tabs: 2D ground track and 3D globe, one figure builder
+# under two projections. No second map stack.
 numpy>=1.24,<2.0
 plotly>=5.20,<7.0
 pandas>=2.0

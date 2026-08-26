@@ -43,8 +43,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from data.tiles import list_tiles, read_tile  # noqa: E402
 
 

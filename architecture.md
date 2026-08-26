@@ -500,16 +500,11 @@ A harbour box and the ships moored inside it overlap by construction. Run one gl
 That is not a hypothetical. It is the scene type this system exists for, and it is what class-agnostic NMS does to it.
 
 ```python
-# inference/engine.py:281
-max_coord = float(boxes.max()) if boxes.size else 0.0
-offsets = cls_ids.astype(np.float32) * (max_coord + 1.0)
-shifted = boxes + offsets[:, None]
-return nms(shifted, scores, iou_thresh)
+# inference/engine.py:batched_nms
+keep = cv2.dnn.NMSBoxesBatched(xywh, scores, cls_ids, 0.0, iou_thresh)
 ```
 
-The fix is the standard coordinate-offset trick: shift each class into its own disjoint region of coordinate space, so boxes of different classes cannot register a non-zero IoU, then run one NMS pass. You keep the single-pass cost instead of looping per class, and suppression becomes exactly what you want it to be: within class only. The offset must exceed the largest coordinate present, which is what `max_coord + 1.0` guarantees.
-
-The class-agnostic primitive is kept at `inference/engine.py:223` because `batched_nms` delegates to it, and its docstring points callers at the batched version.
+The fix is per-class suppression: boxes of different classes never suppress each other, so a harbour cannot delete the ships inside it. This used to be a hand-written IoU loop plus the coordinate-offset trick that shifts each class into its own disjoint region of coordinate space. Both are gone. OpenCV ships the same operation as `cv2.dnn.NMSBoxesBatched`, and cv2 is already a hard dependency of the engine for tile decode and resize, so the hand-rolled version bought nothing but a second implementation to keep correct. It was checked against the replacement over 300 randomised box sets before removal.
 
 The corpus is built to exercise this. `data/synth_demo.py:35` generates a `port` archetype specifically because it produces vessels berthed *inside* harbour boxes, which is the overlap that class-agnostic NMS destroys.
 
@@ -530,7 +525,7 @@ lat = footprint["lat_max"] - (cy_px / tile_size) * (footprint["lat_max"] - footp
 lon = footprint["lon_min"] + (cx_px / tile_size) * (footprint["lon_max"] - footprint["lon_min"])
 ```
 
-That is a clean linear map from pixel space to the tile footprint, and it stays clean exactly as long as pixel `(0,0)` is the footprint's northwest corner and pixel `(640,640)` is its southeast corner. Letterboxing breaks that: now some pixels are padding, the mapping needs a scale and an offset per axis, and every consumer of `pixel_to_latlon` needs to know which letterbox parameters produced the tile it is looking at. That is a state dependency threaded through the wire format, the dashboard, the explainability panel and the tests, all to preserve an aspect ratio that does not exist, because tiles are cut square upstream by `data/preprocess.py:tile_scene` and by `data/dota_prep.py:tile_origins`.
+That is a clean linear map from pixel space to the tile footprint, and it stays clean exactly as long as pixel `(0,0)` is the footprint's northwest corner and pixel `(640,640)` is its southeast corner. Letterboxing breaks that: now some pixels are padding, the mapping needs a scale and an offset per axis, and every consumer of `pixel_to_latlon` needs to know which letterbox parameters produced the tile it is looking at. That is a state dependency threaded through the wire format, the dashboard, the explainability panel and the tests, all to preserve an aspect ratio that does not exist, because tiles are cut square upstream by `data/dota_prep.py:tile_origins`.
 
 So the trade is: accept anisotropic scaling on the rare non-square input, in exchange for a projection with no hidden parameters. Given every tile in the pipeline is already square, the "rare non-square input" costs nothing today.
 
@@ -1107,13 +1102,13 @@ Everything in `ground/eval_suite.py` is the reconstruction of that metric into s
 
 ### Retrieval, and three ways it silently lies
 
-`rag/` is a FAISS index over 20-odd curated maritime knowledge chunks (`rag/knowledge_base.py`), retrieved per payload and injected into the prompt. Three failure modes were real and each has a fix worth naming, because all three produce *plausible* wrong retrieval rather than errors.
+`rag/` embeds 14 curated maritime knowledge chunks (`rag/knowledge_base.py`) and ranks them per payload, injecting the top few into the prompt. Three failure modes were real and each has a fix worth naming, because all three produce *plausible* wrong retrieval rather than errors.
 
-**The stale index.** A persisted FAISS index stores vectors positionally, and retrieval maps result index *i* back to `self._chunks[i]`. That mapping is only valid if the corpus is byte-identical to the one embedded. Storing chunk *ids* would not catch an edit to a chunk's text, and nothing validated them anyway, so editing or reordering `knowledge_base.py` silently returned confidently wrong documents forever, with no error and no way to notice from the output. The fix is a content hash over `(id, title, content)` of every chunk in order (`rag/retrieval.py:179`), checked on load alongside backend and count, with a rebuild on any mismatch.
+**The stale index.** This one is now fixed by deletion. A persisted vector index stores vectors positionally, and retrieval maps result index *i* back to `self._chunks[i]` — a mapping that is only valid if the corpus is byte-identical to the one embedded. Editing or reordering `knowledge_base.py` silently returned confidently wrong documents forever, with no error and no way to notice from the output, so the index carried a content hash over `(id, title, content)` of every chunk in order, checked on load alongside backend and count, with a rebuild on any mismatch. All of that existed to avoid re-embedding fourteen short strings. The corpus is now embedded at construction into an in-memory `(14, 384)` matrix and ranked with a dot product, which is what a flat inner-product index computes anyway. There is no persisted index left to go stale, so the fingerprint, the metadata sidecar, the integrity gate and the FAISS dependency are all gone.
 
-**The wrong projection.** `text-embedding-004` is an *asymmetric* model: it projects documents and queries into deliberately different regions of the space. Embedding a query with `retrieval_document` means querying with a vector the index was never built to be searched by. Fixed by switching on `is_query` (`rag/retrieval.py:118`).
+**The wrong projection.** `text-embedding-004` is an *asymmetric* model: it projects documents and queries into deliberately different regions of the space. Embedding a query with `retrieval_document` means querying with a vector the index was never built to be searched by. Fixed by switching on `is_query` (`rag/retrieval.py`).
 
-**Unnormalised vectors in an inner-product index.** `faiss.IndexFlatIP` only equals cosine similarity on unit vectors. Gemini does not return normalised vectors, so raw dot products let vector *magnitude* dominate ranking. Fixed with an explicit normalisation (`rag/retrieval.py:128`).
+**Unnormalised vectors in an inner-product ranking.** An inner product only equals cosine similarity on unit vectors. Gemini does not return normalised vectors, so raw dot products let vector *magnitude* dominate ranking. Fixed with an explicit normalisation (`rag/retrieval.py`).
 
 All three share a signature: retrieval still returns *k* results, ranked, plausible, and wrong. None of them raises.
 
@@ -1164,7 +1159,7 @@ All six original failures are now regression cases, and the harness has a CI-saf
 
 The generation side was fixed too, at the decoding level rather than the prompt level. The previous version asked the model *in the prompt* never to use double quotes and to make sure its JSON was not truncated, then salvaged failures with a regex scraper that fabricated `conf: 0.5` for recovered anomalies, feeding invented numbers straight into the faithfulness metric. Now the schema is declared to the provider (`ground/llm_analyst.py:125`) so malformed JSON is not representable, and `propertyOrdering` puts `reasoning_trace` before the assessments so the model commits its reasoning tokens before it emits verdicts. On a parse failure the analyst returns `alert_level: UNKNOWN` with empty lists and a `_parse_error` (`ground/llm_analyst.py:387`), which reconciliation maps to severity 0 and `schema_validity` scores as a failure. A degraded read is fine; inventing data to make a metric pass is not.
 
-One loose end: the dashboard's provider selector offers `"anthropic"` (`ground/dashboard.py:987`) and passes it to `OrbitalAnalyst`, which removed that provider and raises `ValueError` for anything but `gemini` or `openai` (`ground/llm_analyst.py:547`). The removal note explains why (the old path pointed an OpenAI client at `api.anthropic.com/v1`, which could never have returned a response), but the selector was not updated with it. Any OpenAI-compatible gateway still works through `provider="openai"` with a `base_url`.
+That loose end is now closed by subtraction. The dashboard used to offer a three-way provider selector and `OrbitalAnalyst` used to branch on it, and two of the three branches had never run: `"anthropic"` pointed an OpenAI client at `api.anthropic.com/v1`, which is not an OpenAI-shaped endpoint and could not return a response, and the OpenAI path was absent from both deployment manifests, so the artifact anyone actually runs could not reach it. Gemini is the only provider now, in one code path with no selector. Provider-agnosticism you have never executed is not portability, it is an untested claim of it, and it costs a dependency and a branch to keep making.
 
 ### Explainability, and what it is not
 
@@ -1320,16 +1315,11 @@ JPEG is the fair lossy baseline here for a specific reason: the six bands are a 
 
 The deepest measurement failure in this repository was not a number. It was the runner.
 
-`tests/test_pipeline.py` is both a standalone script and a pytest module. Its `@run_test` decorator catches exceptions and records PASS/FAIL/SKIP, which is right for the standalone runner: you want the remaining tests to execute and the report to be complete. It is exactly wrong for pytest, which records a pass unless an exception propagates.
+`tests/test_pipeline.py` used to be both a standalone script and a pytest module. It carried its own runner: a `@run_test` decorator that caught exceptions and recorded PASS/FAIL/SKIP, ANSI colour constants, a results accumulator, a hand-maintained list of every test function, and a summary block that set the exit code. That is right for a standalone runner, where you want the remaining tests to execute and the report to be complete. It is exactly wrong for pytest, which records a pass unless an exception propagates.
 
-For most of this file's life only the first half was true. **Every test in it reported PASS under pytest no matter what it asserted, including a deliberately failing probe.**
+For most of this file's life only the first half was true. **Every test in it reported PASS under pytest no matter what it asserted, including a deliberately failing probe.** The first fix was a `_UNDER_PYTEST` flag that re-raised when pytest was driving — correct, and still a hand-rolled runner sitting between the assertions and the thing that reports them.
 
-```python
-# tests/test_pipeline.py:80
-_UNDER_PYTEST = "pytest" in sys.modules
-```
-
-and the outcome is re-raised when pytest is driving (`tests/test_pipeline.py:105`, `:111`). Which means the current green result is a *newer claim than the tests are*: the assertions are old, the ability of those assertions to fail is recent.
+The runner is gone now. The tests are plain `def test_*` functions, skips are `pytest.skip`, and the report, the colours, the timing, the exit code and the discovery all come from pytest, which is what the other five suites in `tests/` already did. The manual registry is the part worth naming: a test function that was written but never added to that list would never have run, and nothing would have said so. Discovery you maintain by hand is a place for tests to go missing silently, which is the same failure as a runner that cannot go red, one level up.
 
 The failure generalises past this repository. A test harness is itself untested code, and the specific thing it must do, propagate a failure, is the thing you never exercise while everything passes. The cheap defence is the one used here: write a test that is supposed to fail and confirm the harness reports it as a failure. The same instinct produced `survived > 0` in section 7 and the `all` control row in the band-dropout sweep (`resilience/degradation.py:133`), which blanks every input band to confirm the harness bites before anyone reads the null results above it.
 
@@ -1447,7 +1437,7 @@ Two things keep this from being decorative. The rate-distortion experiment, whic
 
 **10. "Your test suite reported PASS on everything for months. Why should I believe it now?"**
 
-You should believe the tests exactly as far as the evidence goes, which is narrower than a green badge. The `@run_test` decorator swallowed exceptions, which is correct for the standalone runner and silently wrong under pytest, so every test in `tests/test_pipeline.py` reported PASS regardless of what it asserted, including a deliberately failing probe. `_UNDER_PYTEST` re-raises now (`tests/test_pipeline.py:80`). That means the current result is a newer claim than the assertions are.
+You should believe the tests exactly as far as the evidence goes, which is narrower than a green badge. A hand-rolled `@run_test` decorator swallowed exceptions, which is correct for a standalone runner and silently wrong under pytest, so every test in `tests/test_pipeline.py` reported PASS regardless of what it asserted, including a deliberately failing probe. That runner has since been deleted outright in favour of plain pytest functions. The current result is therefore a newer claim than the assertions are.
 
 Three things go beyond "it is green". `tests/test_resilience.py` was checked by mutation rather than by running it: disabling the watchdog comparison fails two tests, and letting a degraded brief become the last-known-good fails a third. The band-dropout sweep carries an `all` control row that must score 0.000, so the null results above it are known to come from a harness that bites. And `test_a_single_flipped_byte_can_survive_ingest_undetected` asserts in both directions, so it fails if ingest validates nothing *and* if the documented gap ever silently closes. Those are the parts of the suite I would stand behind without the badge.
 

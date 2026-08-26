@@ -31,7 +31,7 @@ ON-BOARD (constrained)                    │  GROUND (unconstrained)
   │  → priority sort → what fits │        │
   └──────────────────────────────┘        │
         ↓  (only what fits)               │
-    ~~ contact window ~~ ─────────────────┼──→  RAG retrieval (FAISS)
+    ~~ contact window ~~ ─────────────────┼──→  RAG retrieval (embeddings)
                                           │       → episodic memory (SQLite)
                                           │       → LLM writes the analysis
                                           │              ↓
@@ -49,9 +49,10 @@ Left of the line runs on a compute budget. Right of the line does not.
 ```bash
 conda create -n osp_dev python=3.10 -y && conda activate osp_dev
 pip install -r requirements.txt
+pip install -e .                       # puts the repo root on the import path
 
 streamlit run ground/dashboard.py      # launch the command centre
-python -m pytest tests/ -v             # 92 tests
+python -m pytest tests/ -v             # 113 tests
 ```
 
 No API key is baked in; ORION reads one from the sidebar for the visitor's own session. Everything upstream of the reasoning layer, perception, quantization, serialization, the policy engine, runs without any key or network access.
@@ -225,7 +226,7 @@ python -m pytest tests/test_resilience.py -v
 | Detector | PyTorch, Ultralytics YOLOv8n (6-ch stem, 4-class head), custom training loop |
 | Runtime | ONNX Runtime, static INT8 PTQ, CPU execution provider |
 | Wire format | Protocol Buffers (`osp.proto`) |
-| Retrieval | FAISS + sentence-transformers *or* Gemini `text-embedding-004` |
+| Retrieval | sentence-transformers *or* Gemini `text-embedding-004`, cosine rank over a 14-chunk corpus |
 | Reasoning | Google Gemini 2.5 Flash, structured-output mode |
 | Memory | SQLite |
 | Orbital mechanics | `sgp4`, hand-written frame conversions, Skyfield as a test-only oracle |
@@ -239,7 +240,7 @@ config/     platform profiles + provenance tags
 data/       preprocessing, synthetic corpus, committed TLE snapshot + brief corpus
 model/      stem swap, training loop, quantization + accuracy benchmarks
 inference/  ONNX engine, NMS, geo-projection, protobuf serialization, explainability
-rag/        knowledge base + FAISS retrieval
+rag/        knowledge base + embedding retrieval
 agent/      PolicyEngine and MissionController, the safety envelope
 orbital/    TLE ingest, SGP4, frames, ground stations, passes, downlink scheduler
 tools/      brief-corpus generation, TLE refresh, container reproduction check

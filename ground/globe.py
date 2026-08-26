@@ -1,7 +1,7 @@
 """
 ground/globe.py
 ───────────────
-Interactive 3D orbital globe — the demo closer.
+Interactive orbital scene figure — 3D globe or flat 2D map.
 
 Renders:
   - Earth surface (Natural Earth tile via Plotly scattergeo/globe projection)
@@ -9,16 +9,9 @@ Renders:
   - Real propagated ground track (SGP4 on a committed TLE)
   - Tile footprint rectangles projected onto the globe
 
-Standalone: python ground/globe.py [payload.json]
-Dashboard:  imported and embedded in dashboard.py Streamlit tab
+Dashboard: imported and embedded in dashboard.py, once per map tab.
 """
 
-import json
-import math
-from pathlib import Path
-from typing import Optional
-
-import numpy as np
 import plotly.graph_objects as go
 
 
@@ -31,9 +24,6 @@ CLASS_COLORS = {
     "harbor":       "#10b981",   # emerald
     "unknown":      "#6b7280",
 }
-
-CONF_OPACITY = lambda c: 0.4 + 0.6 * c   # 0.4 → 1.0 as conf rises
-
 
 # ── Orbital track generator ───────────────────────────────────────────────────
 #
@@ -176,14 +166,22 @@ def build_globe(
     center_lon: float = 77.5,
     satellite: str | None = None,
     station=None,
+    projection: str = "orthographic",
+    title: str | None = None,
+    height: int = 700,
 ) -> go.Figure:
     """
-    Build the full 3D globe Plotly figure from a list of OSP payloads.
+    Build the scene figure from a list of OSP payloads.
 
     When `satellite` is given, the real propagated ground track is drawn,
     anchored at the first brief's capture time so the spacecraft marker sits
     where the spacecraft actually was when it took the first tile. When it is
     not, no track is drawn — see the note above real_ground_track().
+
+    `projection` selects the geometry: "orthographic" is the 3D globe;
+    any flat projection ("equirectangular", "natural earth", ...) renders the
+    same traces as a 2D map. One figure builder covers both views, so the
+    footprints, pins, track and contact footprint cannot drift between them.
     """
     import datetime as _dt
 
@@ -311,33 +309,39 @@ def build_globe(
             ))
             seen_classes.add(cls_name)
 
-    # ── Globe layout ────────────────────────────────────────────────────────
+    # ── Layout ──────────────────────────────────────────────────────────────
+    geo = dict(
+        projection_type=projection,
+        showland=True,
+        landcolor="#1a2744",
+        showocean=True,
+        oceancolor="#0a1628",
+        showlakes=True,
+        lakecolor="#0a1628",
+        showcountries=True,
+        countrycolor="#2d3748",
+        showcoastlines=True,
+        coastlinecolor="#374151",
+        showframe=False,
+        bgcolor="#0a0e1a",
+    )
+    if projection == "orthographic":
+        # A globe is rotated to bring the region into view.
+        geo["projection_rotation"] = dict(lon=center_lon, lat=center_lat, roll=0)
+    else:
+        # A flat map is centred instead, and gets a graticule so the ground
+        # track's inclination is readable rather than decorative.
+        geo["center"] = dict(lon=center_lon, lat=center_lat)
+        geo["lonaxis"] = dict(showgrid=True, gridcolor="#1c2634", gridwidth=0.5)
+        geo["lataxis"] = dict(showgrid=True, gridcolor="#1c2634", gridwidth=0.5)
+
     fig.update_layout(
         title=dict(
-            text="🛰️ OSP Orbital Scene Preprocessor — 3D Situational Awareness",
+            text=title or "🛰️ OSP Orbital Scene Preprocessor — 3D Situational Awareness",
             font=dict(size=18, color="#93c5fd"),
             x=0.5,
         ),
-        geo=dict(
-            projection_type="orthographic",
-            showland=True,
-            landcolor="#1a2744",
-            showocean=True,
-            oceancolor="#0a1628",
-            showlakes=True,
-            lakecolor="#0a1628",
-            showcountries=True,
-            countrycolor="#2d3748",
-            showcoastlines=True,
-            coastlinecolor="#374151",
-            showframe=False,
-            bgcolor="#0a0e1a",
-            projection_rotation=dict(
-                lon=center_lon,
-                lat=center_lat,
-                roll=0,
-            ),
-        ),
+        geo=geo,
         paper_bgcolor="#0a0e1a",
         plot_bgcolor="#0a0e1a",
         font=dict(color="#e2e8f0"),
@@ -347,53 +351,8 @@ def build_globe(
             borderwidth=1,
             font=dict(size=12),
         ),
-        height=700,
+        height=height,
         margin=dict(l=0, r=0, t=60, b=0),
     )
 
     return fig
-
-
-def save_globe_html(payloads: list[dict], out_path: str = "globe.html") -> str:
-    """Save interactive globe as self-contained HTML file."""
-    fig = build_globe(payloads)
-    fig.write_html(
-        out_path,
-        include_plotlyjs="cdn",
-        full_html=True,
-        config={"displayModeBar": True, "scrollZoom": True},
-    )
-    print(f"Globe saved → {out_path}")
-    return out_path
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1:
-        payloads = [json.loads(Path(sys.argv[1]).read_text())]
-    else:
-        # Demo payload
-        payloads = [{
-            "scene_id": "OSP-A3F2C1B4",
-            "timestamp_utc": "2026-04-24T09:12:44Z",
-            "tile_footprint": {"lat_min": 8.0, "lat_max": 9.0,
-                               "lon_min": 77.0, "lon_max": 78.0},
-            "cloud_cover": 0.08,
-            "anomaly_count": 3,
-            "anomalies": [
-                {"type": "ship",   "lat_lon": [8.412, 77.821], "conf": 0.87},
-                {"type": "ship",   "lat_lon": [8.388, 77.795], "conf": 0.79},
-                {"type": "harbor", "lat_lon": [8.501, 77.901], "conf": 0.92},
-            ],
-            "meta": {"model_version": "osp-yolov8n-int8-v1",
-                     "inference_ms": 312.4, "compression_ratio": 85000},
-        }]
-        print("No payload path given — using demo data.")
-
-    fig = build_globe(payloads)
-    fig.show()
-    save_globe_html(payloads, "globe.html")
-    print("\n✓ Globe rendered. Open globe.html for standalone demo.")
