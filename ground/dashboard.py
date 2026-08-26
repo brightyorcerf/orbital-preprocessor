@@ -511,7 +511,11 @@ def conf_color(conf: float) -> str:
 #: Brief cards rendered alongside the map, before the queue goes full width.
 #: Four is roughly the map's own height, so the two-column band ends level
 #: instead of leaving one side empty for several screens.
-QUEUE_BESIDE_MAP = 4
+# The queue is one full-width grid under the map. QUEUE_SHOWN is two rows at
+# QUEUE_COLUMNS across: enough to show the corpus's variety (multi-detection
+# tiles, a low-confidence one, and an empty sector) before the expander.
+QUEUE_COLUMNS = 4
+QUEUE_SHOWN = 8
 
 
 def render_brief_card(payload: dict) -> None:
@@ -797,7 +801,8 @@ def compute_mission_plan(
 
 
 def render_mission_plan(plan: dict) -> None:
-    """Render the contact window, the byte budget and the decision audit trail."""
+    """Render the contact window and the byte budget. The audit trail that
+    justifies the plan is render_audit_trail, rendered after the map."""
     w = plan["window"]
     b = plan["budget"]
 
@@ -806,9 +811,9 @@ def render_mission_plan(plan: dict) -> None:
     # driving a real resource decision, with the rule that produced it.
     st.markdown(
         f"<div class='headline-panel'>"
-        f"<div class='kicker'>Downlink plan · next contact</div>"
+        f"<div class='kicker'>Downlink plan · planned window for this brief corpus</div>"
         f"<div class='lede'>"
-        f"Next pass over {plan['_station_name']} at "
+        f"Pass over {plan['_station_name']} at "
         f"<b>{w['aos_utc'][11:16]} UTC</b>, lasting "
         f"<b>{w['duration_s'] / 60:.1f} minutes</b> at "
         f"{b['downlink_kbps']:.0f} kbps, which is "
@@ -823,6 +828,13 @@ def render_mission_plan(plan: dict) -> None:
         f"</div>"
         f"</div>",
         unsafe_allow_html=True,
+    )
+
+    st.caption(
+        "This is the window the committed corpus was planned against, propagated "
+        "from its capture time. The countdown above is the *live* next pass from "
+        "now, so its AOS, duration and peak elevation are a different pass and "
+        "will not match these."
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -863,7 +875,14 @@ def render_mission_plan(plan: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Audit trail ───────────────────────────────────────────────────────────
+
+def render_audit_trail(plan: dict) -> None:
+    """
+    The receipt: every brief, the rule that decided it, and the running byte
+    count. Split out of render_mission_plan so the map can sit between the plan
+    and its audit trail. A reader meets the geometry before the table that
+    justifies it, which is the order that earns attention before it spends it.
+    """
     st.markdown("#### DECISION AUDIT TRAIL")
     st.caption(
         f"Every brief, the rule applied, and the running byte count. "
@@ -1649,6 +1668,9 @@ def main():
         return
 
     # ── Mission plan ──────────────────────────────────────────────────────────
+    # Held for the audit trail, which renders after the map rather than inside
+    # render_mission_plan: geometry first, then the table that justifies it.
+    plan = None
     if orbital_ready:
         try:
             plan = compute_mission_plan(
@@ -1774,69 +1796,85 @@ def main():
 
     st.divider()
 
-    # ── Main layout: map + analysis ───────────────────────────────────────────
-    map_col, data_col = st.columns([3, 2])
+    # ── Map ───────────────────────────────────────────────────────────────────
+    # Full width, and above the audit trail. The map is what earns a reader's
+    # attention; the audit trail is what spends it. Previously the map sat in a
+    # 3/5 column purely so brief cards could fill the remaining 2/5, which cost
+    # the map half its width and split one queue across two headings and two
+    # column counts. Full width costs nothing and removes both problems.
+    #
+    # Both tabs are the same figure builder under two projections. The 2D view
+    # used to be a separate folium map, which meant the footprints and pins were
+    # drawn twice from two code paths and could disagree — and it could not show
+    # the ground track that its own tab was named after.
+    center_lat, center_lon = footprint_centre(payloads)
+    _station_obj = None
+    if orbital_ready:
+        try:
+            from orbital.stations import get_station as _gs
+            _station_obj = _gs(station_choice)
+        except Exception:
+            _station_obj = None
 
-    with map_col:
-        # Both tabs are the same figure builder under two projections. The 2D
-        # view used to be a separate folium map, which meant the footprints and
-        # pins were drawn twice from two code paths and could disagree — and it
-        # could not show the ground track that its own tab was named after.
-        center_lat, center_lon = footprint_centre(payloads)
-        _station_obj = None
-        if orbital_ready:
-            try:
-                from orbital.stations import get_station as _gs
-                _station_obj = _gs(station_choice)
-            except Exception:
-                _station_obj = None
+    def _scene_figure(projection: str, title: str, height: int):
+        return build_globe(
+            payloads,
+            show_orbit=True,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            satellite=sat_choice if orbital_ready else None,
+            station=_station_obj,
+            projection=projection,
+            title=title,
+            height=height,
+        )
 
-        def _scene_figure(projection: str, title: str, height: int):
-            return build_globe(
-                payloads,
-                show_orbit=True,
-                center_lat=center_lat,
-                center_lon=center_lon,
-                satellite=sat_choice if orbital_ready else None,
-                station=_station_obj,
-                projection=projection,
-                title=title,
-                height=height,
-            )
+    tab1, tab2 = st.tabs(["GROUND TRACK 2D", "ORBIT VIEW 3D"])
 
-        tab1, tab2 = st.tabs(["GROUND TRACK 2D", "ORBIT VIEW 3D"])
+    with tab1:
+        st.markdown("### SCENE COVERAGE AND GROUND TRACK")
+        st.plotly_chart(
+            _scene_figure("equirectangular", "Scene coverage and ground track", 560),
+            width="stretch",
+        )
 
-        with tab1:
-            st.markdown("### SCENE COVERAGE AND GROUND TRACK")
-            st.plotly_chart(
-                _scene_figure("equirectangular", "Scene coverage and ground track", 520),
-                width="stretch",
-            )
+    with tab2:
+        st.markdown("### ORBIT AND CONTACT GEOMETRY")
+        st.plotly_chart(
+            _scene_figure("orthographic", None, 700),
+            width="stretch",
+        )
 
-        with tab2:
-            st.markdown("### ORBIT AND CONTACT GEOMETRY")
-            st.plotly_chart(
-                _scene_figure("orthographic", None, 700),
-                width="stretch",
-            )
+    # ── Audit trail ───────────────────────────────────────────────────────────
+    if plan is not None:
+        st.divider()
+        render_audit_trail(plan)
 
-    # The queue used to run the full corpus down this narrow column while the
-    # map column held a fixed-height map, so roughly 40% of the page's scroll
-    # depth was empty black with cards stacking off to one side. It read as a
-    # broken page. Only as many cards as stand beside the map go here; the
-    # rest flow full width below, where they have room to sit three across.
-    with data_col:
-        st.markdown("### BRIEF QUEUE")
-        for payload in payloads[:QUEUE_BESIDE_MAP]:
-            render_brief_card(payload)
+    # ── Brief queue ───────────────────────────────────────────────────────────
+    # One queue, one grid. The audit trail above already enumerates all of these
+    # scenes with more per-row information than a card carries, so the cards are
+    # here to show what a brief *is*, not to be a second copy of the table. A
+    # first screenful covers the variety in the corpus; the tail goes behind an
+    # expander rather than adding rows of scroll that the table already served.
+    st.divider()
+    st.markdown("### BRIEF QUEUE")
+    st.caption(
+        f"{len(payloads)} briefs in this corpus. Every one of them is also a row "
+        f"in the audit trail above, with the rule that scheduled it."
+    )
 
-    rest = payloads[QUEUE_BESIDE_MAP:]
-    if rest:
-        st.markdown(f"#### BRIEF QUEUE · {len(rest)} MORE")
-        grid = st.columns(3)
-        for i, payload in enumerate(rest):
-            with grid[i % 3]:
+    def _queue_grid(items: list[dict]) -> None:
+        grid = st.columns(QUEUE_COLUMNS)
+        for i, payload in enumerate(items):
+            with grid[i % QUEUE_COLUMNS]:
                 render_brief_card(payload)
+
+    _queue_grid(payloads[:QUEUE_SHOWN])
+
+    rest = payloads[QUEUE_SHOWN:]
+    if rest:
+        with st.expander(f"Show {len(rest)} more briefs"):
+            _queue_grid(rest)
 
     # ── Evidence ──────────────────────────────────────────────────────────────
     # The three measurements that carry the argument, given equal billing and
