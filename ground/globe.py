@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 # ── Colour maps ───────────────────────────────────────────────────────────────
 
 CLASS_COLORS = {
-    "ship":         "#3b82f6",   # blue
+    "ship":         "#ff5c5c",   # red
     "airplane":     "#f59e0b",   # amber
     "storage-tank": "#8b5cf6",   # purple
     "harbor":       "#10b981",   # emerald
@@ -148,9 +148,9 @@ def footprint_to_scatter(footprint: dict, scene_id: str) -> go.Scattergeo:
         lat=lats,
         lon=lons,
         mode="lines",
-        line=dict(width=1.5, color="#3b82f6"),
+        line=dict(width=1.5, color="#ff5c5c"),
         fill="toself",
-        fillcolor="rgba(59,130,246,0.08)",
+        fillcolor="rgba(255,92,92,0.08)",
         name=f"Tile: {scene_id}",
         showlegend=True,
         hoverinfo="name",
@@ -167,7 +167,6 @@ def build_globe(
     satellite: str | None = None,
     station=None,
     projection: str = "orthographic",
-    title: str | None = None,
     height: int = 700,
 ) -> go.Figure:
     """
@@ -194,16 +193,17 @@ def build_globe(
             for seg_lats, seg_lons in split_track_by_antimeridian(vis_lats, vis_lons):
                 fig.add_trace(go.Scattergeo(
                     lat=seg_lats, lon=seg_lons, mode="lines",
-                    line=dict(width=1.0, color="#38bdf8", dash="dash"),
+                    line=dict(width=1.0, color="#ffb199", dash="dash"),
                     name=f"Contact footprint ({station.elevation_mask_deg:.0f}° mask)",
                     showlegend=True, hoverinfo="skip",
                 ))
+            # Text label dropped: at close zoom it collides with the
+            # spacecraft's own "🛰 NAME" label sitting on the same patch of
+            # ground. The station's name is still one hover away.
             fig.add_trace(go.Scattergeo(
                 lat=[station.latitude_deg], lon=[station.longitude_deg],
-                mode="markers+text",
-                marker=dict(size=11, color="#38bdf8", symbol="triangle-up"),
-                text=[station.name.split(" (")[0]],
-                textposition="bottom center",
+                mode="markers",
+                marker=dict(size=11, color="#ffb199", symbol="triangle-up"),
                 name="Ground station", showlegend=False,
                 hovertemplate=(f"{station.name}<br>"
                                "Lat: %{lat:.4f}°<br>Lon: %{lon:.4f}°<extra></extra>"),
@@ -342,24 +342,148 @@ def build_globe(
         geo["lonaxis"] = dict(showgrid=True, gridcolor="#1c2634", gridwidth=0.5)
         geo["lataxis"] = dict(showgrid=True, gridcolor="#1c2634", gridwidth=0.5)
 
+    # No in-figure title: the caller already renders one as a page heading
+    # above the tab, and stacking a second, centred title on top of the map
+    # itself only gave it something to collide with (it used to sit right on
+    # top of the spacecraft's own label).
     fig.update_layout(
-        title=dict(
-            text=title or "🛰️ OSP Orbital Scene Preprocessor — 3D Situational Awareness",
-            font=dict(size=18, color="#93c5fd"),
-            x=0.5,
-        ),
         geo=geo,
         paper_bgcolor="#0a0e1a",
         plot_bgcolor="#0a0e1a",
         font=dict(color="#e2e8f0"),
         legend=dict(
             bgcolor="#1e2a3a",
-            bordercolor="#374151",
+            bordercolor="#4a2a2a",
             borderwidth=1,
             font=dict(size=12),
         ),
         height=height,
-        margin=dict(l=0, r=0, t=60, b=0),
+        margin=dict(l=0, r=0, t=10, b=0),
     )
 
     return fig
+
+
+# ── 2D tile map (real basemap) ─────────────────────────────────────────────────
+#
+# The orthographic/equirectangular globe above draws Natural-Earth-style land
+# and ocean fills — there is no such thing as real street-level or coastline
+# detail in a Scattergeo trace. For the "where on the ground is this"
+# question, a tile basemap answers it better than a schematic ever will, so
+# the 2D tab gets a real Leaflet map instead of a flat projection of the same
+# globe figure. It draws from the same real_ground_track() / visibility_circle()
+# helpers as build_globe(), so the two tabs can look different without the
+# underlying geometry disagreeing.
+
+def build_folium_map(
+    payloads: list[dict],
+    center_lat: float = 8.5,
+    center_lon: float = 77.5,
+    satellite: str | None = None,
+    station=None,
+    zoom_start: int = 8,
+):
+    """Build a Leaflet/CartoDB map with tile footprints, anomaly pins, the
+    real ground track and the station's visibility circle."""
+    import datetime as _dt
+
+    import folium
+
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom_start,
+        tiles="CartoDB dark_matter",
+        control_scale=True,
+    )
+
+    if station is not None:
+        try:
+            vis_lats, vis_lons = visibility_circle(station)
+            folium.PolyLine(
+                locations=list(zip(vis_lats, vis_lons)),
+                color="#ffb199", weight=1.5, dash_array="6,6",
+                tooltip=f"Contact footprint ({station.elevation_mask_deg:.0f}° mask)",
+            ).add_to(m)
+            folium.Marker(
+                location=[station.latitude_deg, station.longitude_deg],
+                icon=folium.Icon(color="lightgray", icon="signal", prefix="fa"),
+                tooltip=station.name,
+            ).add_to(m)
+        except Exception:
+            # Presentation layer only — never take the page down over a map trace.
+            pass
+
+    if satellite:
+        try:
+            anchor = None
+            for p in payloads:
+                ts = p.get("timestamp_utc", "")
+                if ts:
+                    anchor = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    break
+            anchor = anchor or _dt.datetime.now(_dt.timezone.utc)
+
+            track_lats, track_lons, track_times = real_ground_track(
+                satellite, anchor - _dt.timedelta(minutes=33), minutes=100.0
+            )
+            for seg_lats, seg_lons in split_track_by_antimeridian(track_lats, track_lons):
+                folium.PolyLine(
+                    locations=list(zip(seg_lats, seg_lons)),
+                    color="#fcd34d", weight=2, dash_array="2,6",
+                    tooltip=f"{satellite} ground track (SGP4)",
+                ).add_to(m)
+
+            idx = min(
+                range(len(track_times)),
+                key=lambda i: abs((track_times[i] - anchor).total_seconds()),
+            )
+            folium.Marker(
+                location=[track_lats[idx], track_lons[idx]],
+                icon=folium.Icon(color="orange", icon="rocket", prefix="fa"),
+                tooltip=f"{satellite} at {anchor:%Y-%m-%d %H:%M:%S}Z",
+            ).add_to(m)
+        except Exception:
+            pass
+
+    for payload in payloads:
+        fp        = payload.get("tile_footprint", {})
+        scene_id  = payload.get("scene_id", "?")
+        cloud     = payload.get("cloud_cover", 0)
+        anomalies = payload.get("anomalies", [])
+
+        if all(k in fp for k in ("lat_min", "lat_max", "lon_min", "lon_max")):
+            bounds = [
+                [fp["lat_min"], fp["lon_min"]],
+                [fp["lat_min"], fp["lon_max"]],
+                [fp["lat_max"], fp["lon_max"]],
+                [fp["lat_max"], fp["lon_min"]],
+            ]
+            folium.Polygon(
+                locations=bounds,
+                color="#ff5c5c", weight=1.5,
+                fill=True, fill_color="#ff5c5c", fill_opacity=0.05,
+                tooltip=f"{scene_id} | {cloud:.0%} cloud",
+            ).add_to(m)
+
+        for a in anomalies:
+            lat, lon = a.get("lat_lon", [center_lat, center_lon])
+            cls_name = a.get("type", "unknown")
+            conf     = a.get("conf", 0)
+            color    = CLASS_COLORS.get(cls_name, CLASS_COLORS["unknown"])
+
+            popup_html = (
+                f"<div style='font-family:monospace;font-size:12px;min-width:180px'>"
+                f"<b>{cls_name.upper()}</b><br>"
+                f"Scene: {scene_id}<br>"
+                f"Conf: <b style='color:{color}'>{conf:.0%}</b><br>"
+                f"Lat: {lat:.5f}°<br>Lon: {lon:.5f}°</div>"
+            )
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=8 + int(conf * 8),
+                color=color, fill=True, fill_color=color, fill_opacity=0.75,
+                popup=folium.Popup(popup_html, max_width=220),
+                tooltip=f"{cls_name} ({conf:.0%})",
+            ).add_to(m)
+
+    return m

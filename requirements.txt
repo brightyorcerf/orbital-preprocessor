@@ -32,10 +32,12 @@ streamlit>=1.32,<2.0
 # Streamlit pulls it in transitively, but a module that imports a package must
 # declare it rather than rely on someone else's dependency staying put.
 pandas>=2.0
-# Both map tabs (2D ground track, 3D globe) are one ground/globe.py figure
-# under two projections. folium and streamlit-folium used to draw the 2D one
-# from a second code path and are gone.
+# 3D orbit view is a Plotly Scattergeo globe (ground/globe.py: build_globe).
 plotly>=5.20,<7.0          # validated on 6.9; 5.x also works
+# 2D ground-track tab is a real Leaflet/CartoDB basemap (build_folium_map) —
+# a Scattergeo projection has no coastline or street-level detail to show.
+folium>=0.15
+streamlit-folium>=0.20
 
 # ── LLM reasoning layer (ORION analyst) ──────────────────────────────────────
 # Gemini only. The OpenAI-compatible path was absent from every deployment

@@ -43,7 +43,8 @@ if _ROOT not in sys.path:
 
 import streamlit as st
 
-from ground.globe import build_globe
+from ground.globe import build_globe, build_folium_map
+from streamlit_folium import st_folium
 
 # ── GenAI module imports (graceful fallback if deps missing) ──────────────────
 try:
@@ -179,10 +180,10 @@ st.markdown(f"""
         padding: 12px 16px;
         margin-bottom: 8px;
     }}
-    .alert-red    {{ border-left-color: #d4d4d4 !important; }}
-    .alert-orange {{ border-left-color: #8b8b8b !important; }}
-    .alert-yellow {{ border-left-color: #f5f5f5 !important; }}
-    .alert-green  {{ border-left-color: #f5f5f5 !important; }}
+    .alert-red    {{ border-left-color: #ff5c5c !important; }}
+    .alert-orange {{ border-left-color: #f5a35c !important; }}
+    .alert-yellow {{ border-left-color: #e8d24a !important; }}
+    .alert-green  {{ border-left-color: #7ee787 !important; }}
 
     /* Mission Strip */
     .mission-strip {{
@@ -234,7 +235,7 @@ st.markdown(f"""
         padding: 26px 30px 22px;
         margin: 6px 0 26px;
         background:
-            radial-gradient(1200px 220px at 12% -40%, rgba(120,170,255,0.10), transparent 70%),
+            radial-gradient(1200px 220px at 12% -40%, rgba(255,110,110,0.10), transparent 70%),
             linear-gradient(180deg, rgba(14,16,20,0.96) 0%, rgba(6,7,9,0.96) 100%);
         overflow: hidden;
     }}
@@ -244,7 +245,7 @@ st.markdown(f"""
         content: "";
         position: absolute; top: 0; left: -40%;
         width: 40%; height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(150,200,255,0.75), transparent);
+        background: linear-gradient(90deg, transparent, rgba(255,140,140,0.75), transparent);
         animation: sweep 7s linear infinite;
     }}
     @keyframes sweep {{ to {{ left: 120%; }} }}
@@ -279,8 +280,8 @@ st.markdown(f"""
     }}
     .budget-fill {{
         height: 100%;
-        background: linear-gradient(90deg, #4b9fff, #8fd0ff);
-        box-shadow: 0 0 12px rgba(90,160,255,0.55);
+        background: linear-gradient(90deg, #ff5c5c, #ff9d8f);
+        box-shadow: 0 0 12px rgba(255,92,92,0.55);
     }}
     .budget-scale {{
         display: flex; justify-content: space-between;
@@ -509,10 +510,10 @@ COORD: {lat:.5f}°N, {lon:.5f}°E
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 CONF_COLORS = {
-    (0.8, 1.0): "#d4d4d4",   
-    (0.6, 0.8): "#8b8b8b",   
-    (0.4, 0.6): "#f5f5f5",   
-    (0.0, 0.4): "#f5f5f5",   
+    (0.8, 1.0): "#ff5c5c",   # red    — high confidence
+    (0.6, 0.8): "#f5a35c",   # orange
+    (0.4, 0.6): "#e8d24a",   # yellow
+    (0.0, 0.4): "#7ee787",   # green  — low confidence
 }
 
 def conf_color(conf: float) -> str:
@@ -1850,8 +1851,7 @@ def main():
         "<div class='mg-title'>Desktop required</div>"
         "<div class='mg-body'>The OSP command centre is an instrument panel: "
         "a ground track, a byte-budget schedule and a decision audit trail "
-        "side by side. It needs a wider screen than this one. Open it on a "
-        "desktop browser.</div></div>",
+        "side by side.</div></div>",
         unsafe_allow_html=True,
     )
 
@@ -1930,6 +1930,61 @@ def main():
 
     st.divider()
 
+    # ── Map ───────────────────────────────────────────────────────────────────
+    # Full width, and directly under the headline console. The map is what
+    # earns a reader's attention, so it leads the rest of the page rather than
+    # sitting below a status strip and a provenance blurb first.
+    #
+    # 3D is a Plotly globe (build_globe); 2D is a real Leaflet/CartoDB basemap
+    # (build_folium_map) — a flat Scattergeo projection has no coastline or
+    # street-level detail, which a tile basemap answers better. Both draw from
+    # the same payloads / real_ground_track() / visibility_circle() calls, so
+    # the footprints, pins and track can't drift between the two tabs even
+    # though the renderers differ.
+    center_lat, center_lon = footprint_centre(payloads)
+    _station_obj = None
+    if orbital_ready:
+        try:
+            from orbital.stations import get_station as _gs
+            _station_obj = _gs(station_choice)
+        except Exception:
+            _station_obj = None
+
+    def _scene_figure(projection: str, height: int):
+        return build_globe(
+            payloads,
+            show_orbit=True,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            satellite=sat_choice if orbital_ready else None,
+            station=_station_obj,
+            projection=projection,
+            height=height,
+        )
+
+    # 3D first: it is the view that reads as a spacecraft rather than as a GIS
+    # layer, and Streamlit opens on the first tab.
+    tab1, tab2 = st.tabs(["ORBIT VIEW 3D", "GROUND TRACK 2D"])
+
+    with tab1:
+        st.markdown("### ORBIT AND CONTACT GEOMETRY")
+        st.plotly_chart(
+            _scene_figure("orthographic", 700),
+            width="stretch",
+        )
+
+    with tab2:
+        st.markdown("### SCENE COVERAGE AND GROUND TRACK")
+        fmap = build_folium_map(
+            payloads,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            satellite=sat_choice if orbital_ready else None,
+            station=_station_obj,
+        )
+        st_folium(fmap, height=560, use_container_width=True, returned_objects=[])
+
+    st.divider()
 
     # ── Mission Status Strip ──────────────────────────────────────────────────
     n_briefs   = len(payloads)
@@ -2008,60 +2063,8 @@ def main():
 
     st.divider()
 
-    # ── Map ───────────────────────────────────────────────────────────────────
-    # Full width, and above the audit trail. The map is what earns a reader's
-    # attention; the audit trail is what spends it. Previously the map sat in a
-    # 3/5 column purely so brief cards could fill the remaining 2/5, which cost
-    # the map half its width and split one queue across two headings and two
-    # column counts. Full width costs nothing and removes both problems.
-    #
-    # Both tabs are the same figure builder under two projections. The 2D view
-    # used to be a separate folium map, which meant the footprints and pins were
-    # drawn twice from two code paths and could disagree — and it could not show
-    # the ground track that its own tab was named after.
-    center_lat, center_lon = footprint_centre(payloads)
-    _station_obj = None
-    if orbital_ready:
-        try:
-            from orbital.stations import get_station as _gs
-            _station_obj = _gs(station_choice)
-        except Exception:
-            _station_obj = None
-
-    def _scene_figure(projection: str, title: str, height: int):
-        return build_globe(
-            payloads,
-            show_orbit=True,
-            center_lat=center_lat,
-            center_lon=center_lon,
-            satellite=sat_choice if orbital_ready else None,
-            station=_station_obj,
-            projection=projection,
-            title=title,
-            height=height,
-        )
-
-    # 3D first: it is the view that reads as a spacecraft rather than as a GIS
-    # layer, and Streamlit opens on the first tab.
-    tab1, tab2 = st.tabs(["ORBIT VIEW 3D", "GROUND TRACK 2D"])
-
-    with tab1:
-        st.markdown("### ORBIT AND CONTACT GEOMETRY")
-        st.plotly_chart(
-            _scene_figure("orthographic", None, 700),
-            width="stretch",
-        )
-
-    with tab2:
-        st.markdown("### SCENE COVERAGE AND GROUND TRACK")
-        st.plotly_chart(
-            _scene_figure("equirectangular", "Scene coverage and ground track", 560),
-            width="stretch",
-        )
-
     # ── Audit trail ───────────────────────────────────────────────────────────
     if plan is not None:
-        st.divider()
         render_audit_trail(plan)
 
     # ── Brief queue ───────────────────────────────────────────────────────────

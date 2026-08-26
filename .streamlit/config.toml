@@ -4,7 +4,7 @@
 
 [theme]
 base = "dark"
-primaryColor = "#4da3ff"
+primaryColor = "#ff5c5c"
 backgroundColor = "#000000"
 secondaryBackgroundColor = "#0e1117"
 textColor = "#e6edf3"
