@@ -5,14 +5,17 @@
 # GPU payload and installs the full stack (torch, ultralytics, onnxruntime-gpu)
 # because it has to train, export and infer. This image only has to serve the
 # committed brief corpus in data/briefs/, so it installs the dashboard subset
-# and stays small enough for a free Space or a Cloud Run instance.
+# and stays small enough for a free-tier host.
 #
 # Build:  docker build -f deploy/Dockerfile -t osp-dashboard .
 # Run:    docker run --rm -p 8501:8501 osp-dashboard
 # Then:   http://localhost:8501
 #
-# Hugging Face Spaces (Docker SDK) uses port 7860; PORT is honoured below so
-# the same image serves both without an edit.
+# The public deploy is Streamlit Community Cloud, which does not use this
+# image; it installs ground/requirements.txt directly. This is the local and
+# self-hosted path, and shares that one manifest so the two cannot drift.
+# PORT is honoured below rather than hardcoded, so the image also runs
+# unmodified on any host that injects its own port at runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.11-slim
@@ -25,8 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY deploy/requirements-dashboard.txt .
-RUN pip install --no-cache-dir -r requirements-dashboard.txt
+COPY ground/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

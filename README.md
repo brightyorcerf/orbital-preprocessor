@@ -301,7 +301,7 @@ orbital/    TLE ingest, SGP4, frames, ground stations, passes, downlink schedule
 resilience/ bit-flip injection, CRC weight protection, degradation sweeps
 tools/      brief-corpus generation, TLE refresh, container reproduction check
 ground/     dashboard, 3D globe, CCSDS 123 encoder, episodic memory, LLM analyst, eval suite
-deploy/     dashboard-only Docker image and its Hugging Face Space manifest
+deploy/     dashboard-only Docker image and the deployment notes
 tests/      the 113 above
 docs/       committed latency distributions, figures, DOTA dataset spec
 ```

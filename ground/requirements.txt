@@ -1,21 +1,52 @@
 # ground/requirements.txt
 # ────────────────────────
-# Streamlit Community Cloud resolves dependencies from the entrypoint's own
-# directory before falling back to the repo root. This file exists so the
-# hosted dashboard (entrypoint: ground/dashboard.py) installs the slim
-# dashboard set instead of the root requirements.txt, which pulls torch,
-# ultralytics and sentence-transformers for the training path the dashboard
-# never touches. Community Cloud's free tier does not fit the full manifest.
+# The single dashboard dependency manifest. Two consumers read this file:
 #
-# Kept identical to deploy/requirements-dashboard.txt (used by the Docker
-# deploy path); see that file for why each package is here.
+#   1. Streamlit Community Cloud, which resolves dependencies from the
+#      entrypoint's own directory before falling back to the repo root. The
+#      entrypoint is ground/dashboard.py, so this file wins over the root
+#      requirements.txt — which pulls torch, ultralytics and
+#      sentence-transformers for the training path the dashboard never
+#      touches. Community Cloud's free tier caps an app at 1 GB, so the full
+#      manifest does not merely install slowly, it cannot fit at all.
+#
+#   2. deploy/Dockerfile, for running the same dashboard in a container.
+#
+# This used to be duplicated as deploy/requirements-dashboard.txt with a
+# comment on each copy asserting they were identical. They drifted: the
+# Leaflet ground track added folium and streamlit-folium to one and not the
+# other, and the deployed page died on ModuleNotFoundError. One file now.
+#
+# Every import the dashboard makes outside this list is wrapped in a
+# try/except ImportError with a visible degraded state, which is why the RAG
+# stack and the training-only dependencies can be dropped without the page
+# failing to boot. See ground/dashboard.py's _AVAILABLE flags.
 
+# ── Page shell ────────────────────────────────────────────────────────────────
 streamlit>=1.32,<2.0
+
+# ── Maps (imported unguarded, so these are boot-critical) ─────────────────────
+# Two map stacks, not one. The 3D globe is Plotly; the 2D ground track is a
+# real Leaflet/CartoDB basemap, because a flat Scattergeo projection has no
+# coastline or street-level detail to show. ground/globe.py imports folium
+# inside build_folium_map, and ground/dashboard.py imports st_folium at module
+# scope, so a missing folium takes the whole page down rather than one tab.
 numpy>=1.24,<2.0
 plotly>=5.20,<7.0
 pandas>=2.0
+folium>=0.15
+streamlit-folium>=0.20
+
+# ── orbital/: the propagator behind the downlink plan panel ───────────────────
 sgp4>=2.23,<3.0
+
+# ── Brief payload inspection (protobuf round-trip + thumbnail decode) ─────────
 protobuf>=5.29,<6.0
 onnxruntime>=1.17,<2.0
-opencv-python-headless>=4.8,<5.0
+opencv-python-headless>=4.8,<5.0   # headless: no GL in a container
+
+# ── ORION analyst ─────────────────────────────────────────────────────────────
+# Deliberately no key is shipped. A visitor supplies their own in the sidebar,
+# so a public deployment carries no spend risk. Without one the tab renders its
+# "no key configured" state instead of failing.
 google-generativeai>=0.5,<1.0

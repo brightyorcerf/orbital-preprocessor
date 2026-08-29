@@ -1474,7 +1474,7 @@ python tools/refresh_tle.py            # fetch a new dated snapshot from CelesTr
 docker build -f deploy/Dockerfile -t osp-dashboard . && docker run --rm -p 8501:8501 osp-dashboard
 ```
 
-That image installs `deploy/requirements-dashboard.txt`, not the root manifest, and serves the committed corpus rather than running the detector, which takes it from roughly 10 GB to 1.46 GB.
+That image installs `ground/requirements.txt`, not the root manifest, and serves the committed corpus rather than running the detector, which takes it from roughly 10 GB to 1.46 GB.
 
 ---
 
