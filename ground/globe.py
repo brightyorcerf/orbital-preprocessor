@@ -392,7 +392,10 @@ def build_folium_map(
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=zoom_start,
-        tiles="CartoDB dark_matter",
+        # folium's "CartoDB dark_matter" alias now points at CARTO's keyed
+        # endpoint; the old no-key raster tile URL still works.
+        tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
         control_scale=True,
     )
 
